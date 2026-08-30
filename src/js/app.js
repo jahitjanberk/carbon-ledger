@@ -62,6 +62,8 @@ var worldPrev = WORLD[WORLD.length-2];
 var LATEST_YEAR = worldLatest.year;
 var PREV_YEAR = worldPrev.year;
 var META = DATA.meta || {};
+var CONS_YEAR = META.consumption_year || LATEST_YEAR;
+function metricYear(m){ return m.vintage==='consumption' ? CONS_YEAR : LATEST_YEAR; }
 
 function applyYearLabels(){
   var set = function(id, text){
@@ -254,6 +256,10 @@ document.querySelectorAll('[data-lang-btn]').forEach(function(b){
 /* ---------------- metrics ---------------- */
 var METRICS = [
   { key:'co2', label:'Total CO₂', fmt: fmtMt, mapLabel:'CO₂ emissions', legendUnit:'Mt CO₂ / yr' },
+  // trade-adjusted: emissions attributed to where goods are consumed, not
+  // produced -- upstream data lags territorial figures, so it carries its own
+  // vintage year (META.consumption_year)
+  { key:'consumption_co2', label:'Consumption', fmt: fmtMt, mapLabel:'Consumption-based CO₂', legendUnit:'Mt CO₂ / yr', vintage:'consumption' },
   { key:'co2_per_capita', label:'Per person', fmt: function(v){ return fmtNum(v,2)+' t'; }, mapLabel:'CO₂ per person', legendUnit:'t CO₂ / yr' },
   { key:'cumulative_co2', label:'Cumulative', fmt: fmtMt, mapLabel:'Cumulative CO₂ since 1750', legendUnit:'Mt CO₂' },
   { key:'share_of_temperature_change_from_ghg', label:'Warming share', fmt: fmtPct, mapLabel:'Share of global warming', legendUnit:'% of observed warming' },
@@ -315,6 +321,51 @@ function renderKPIs(){
   });
 }
 
+function setMetric(key){
+  state.metric = key;
+  renderMetricPicker();
+  renderMap();
+  renderLegend();
+  renderBarChart();
+  renderPanel();
+  syncUrl();
+}
+
+/* ================= carbon budget strip ================= */
+// IPCC AR6 WG1 remaining carbon budgets from the START of 2020:
+// 500 Gt CO2 for a 50% chance of holding 1.5C, 1150 Gt for a 67% chance of
+// 2C. Emissions since 2020 are subtracted from the world series at render.
+var BUDGET_FROM = 2020, BUDGET_15_GT = 500, BUDGET_20_GT = 1150;
+function renderBudget(){
+  var el = document.getElementById('budget-body');
+  el.innerHTML = '';
+  var spent = WORLD.filter(function(r){ return r.year>=BUDGET_FROM; })
+    .reduce(function(s,r){ return s+(r.co2||0); }, 0) / 1000;
+  var rate = worldLatest.co2/1000;
+  var left15 = BUDGET_15_GT - spent, left20 = BUDGET_20_GT - spent;
+  var yrs15 = left15/rate, yrs20 = left20/rate;
+
+  var head = document.createElement('div'); head.className='budget-head';
+  head.innerHTML = '<div class="bh-title">'+t('Remaining 1.5°C carbon budget')+'</div>'
+    + '<div class="bh-sub">'+tf('of {b} Gt from {y} · IPCC AR6, 50% chance',{b:fmtNum(BUDGET_15_GT,0), y:BUDGET_FROM})+'</div>';
+  el.appendChild(head);
+
+  var track = document.createElement('div'); track.className='budget-track';
+  track.title = tf('{s} Gt emitted since {y}',{s:fmtNum(spent,0), y:BUDGET_FROM});
+  var fill = document.createElement('div'); fill.className='budget-fill';
+  fill.style.width = Math.min(100, spent/BUDGET_15_GT*100)+'%';
+  track.appendChild(fill);
+  el.appendChild(track);
+
+  var num = document.createElement('div'); num.className='budget-num';
+  num.innerHTML = '<div class="bn-v num">'+(left15>0?fmtNum(left15,0)+' Gt':t('Exhausted'))+'</div>'
+    + '<div class="bn-s">'+(left15>0
+        ? tf('≈{n} years at the current rate — gone around {yr}',{n:fmtNum(yrs15,0), yr:Math.round(LATEST_YEAR+1+yrs15)})
+        : tf('overspent by {v} Gt',{v:fmtNum(-left15,0)}))+'</div>'
+    + '<div class="bn-s">'+tf('2°C (67% chance): {v} Gt left, ≈{n} years',{v:fmtNum(left20,0), n:fmtNum(yrs20,0)})+'</div>';
+  el.appendChild(num);
+}
+
 /* ================= metric picker ================= */
 function renderMetricPicker(){
   var el = document.getElementById('metric-picker');
@@ -323,18 +374,61 @@ function renderMetricPicker(){
     var b = document.createElement('button');
     b.type='button'; b.className='metric-btn'+(state.metric===m.key?' active':'');
     b.textContent = t(m.label);
-    b.addEventListener('click', function(){
-      state.metric = m.key;
-      renderMetricPicker();
-      renderMap();
-      renderLegend();
-      renderBarChart();
-      renderPanel();
-      syncUrl();
-    });
+    b.addEventListener('click', function(){ setMetric(m.key); });
     el.appendChild(b);
   });
 }
+
+/* ================= map time scrubber ================= */
+// Animates the choropleth over 1950..latest for the metrics that have a
+// per-year series in history.json. The color scale stays fixed at the
+// latest-year domain so shades are comparable across years.
+var mapYear = null;            // null = latest (live) year
+var scrubTimer = null;
+var SCRUB_KEYS = { co2:'co2', co2_per_capita:'co2_per_capita' };
+function scrubSupported(){ return !!SCRUB_KEYS[state.metric]; }
+function histValueAt(iso, year){
+  var h = HISTORY[iso];
+  if(!h) return null;
+  var idx = year - h.years[0];
+  if(idx<0 || idx>=h.years.length) return null;
+  return h[SCRUB_KEYS[state.metric]][idx];
+}
+function stopScrubPlay(){
+  if(scrubTimer){ clearInterval(scrubTimer); scrubTimer = null; }
+  var b = document.getElementById('scrub-play');
+  b.textContent = '▶'; b.setAttribute('aria-label', t('Play'));
+}
+function updateScrubUI(){
+  var wrap = document.getElementById('map-scrub');
+  var supported = scrubSupported();
+  wrap.hidden = !supported;
+  if(!supported && mapYear!=null){ mapYear = null; stopScrubPlay(); }
+  var range = document.getElementById('scrub-range');
+  range.max = LATEST_YEAR;
+  range.value = mapYear==null ? LATEST_YEAR : mapYear;
+  document.getElementById('scrub-year').textContent = mapYear==null ? LATEST_YEAR : mapYear;
+  var mt = document.getElementById('map-title');
+  if(mt) mt.textContent = tf('Emissions by country, {y}',
+    {y: (mapYear!=null && supported) ? mapYear : metricYear(currentMetric())});
+}
+document.getElementById('scrub-range').addEventListener('input', function(){
+  stopScrubPlay();
+  var v = +this.value;
+  mapYear = v>=LATEST_YEAR ? null : v;
+  renderMap();
+});
+document.getElementById('scrub-play').addEventListener('click', function(){
+  if(scrubTimer){ stopScrubPlay(); return; }
+  this.textContent = '❚❚'; this.setAttribute('aria-label', t('Pause'));
+  if(mapYear==null || mapYear>=LATEST_YEAR) mapYear = 1950;
+  renderMap();
+  scrubTimer = setInterval(function(){
+    mapYear++;
+    if(mapYear>=LATEST_YEAR){ mapYear = null; stopScrubPlay(); }
+    renderMap();
+  }, 130);
+});
 
 /* ================= color scale ================= */
 var LIGHT_STEPS = ['#cde2fb','#b7d3f6','#9ec5f4','#86b6ef','#6da7ec','#5598e7','#3987e5','#2a78d6','#256abf','#1c5cab','#184f95','#104281','#0d366b'];
@@ -407,14 +501,20 @@ function renderMap(){
   if(!mapReady) initMapGeometry();
   var theme = effectiveTheme();
   var m = currentMetric();
+  var scrubbing = mapYear!=null && scrubSupported();
+  var valueOf = function(d){
+    var c = byIso[d.id];
+    if(!c) return null;
+    return scrubbing ? histValueAt(d.id, mapYear) : c[m.key];
+  };
   svg.selectAll('path.country-path')
-    .classed('no-data', function(d){ var c=byIso[d.id]; return !c || c[m.key]==null; })
+    .classed('no-data', function(d){ return valueOf(d)==null; })
     .classed('selected', function(d){ return d.id===state.selectedIso; })
     .classed('pinned', function(d){ return pinIndex(d.id)>=0; })
     .style('fill', function(d){
-      var c = byIso[d.id];
-      if(!c || c[m.key]==null) return null;
-      return colorForMetric(m, c[m.key], theme);
+      var v = valueOf(d);
+      if(v==null) return null;
+      return colorForMetric(m, v, theme);
     });
   // Pinned countries get an outline drawn in a top overlay group: a casing
   // ring in the page background under the slot color, so the outline reads
@@ -431,6 +531,7 @@ function renderMap(){
     overlay.append('path').attr('d', d).attr('fill','none')
       .attr('stroke','var('+CAT_HEX[i]+')').attr('stroke-width',1.7).attr('stroke-linejoin','round');
   });
+  updateScrubUI();
 }
 
 function onCountryHover(ev, d){
@@ -442,6 +543,15 @@ function onCountryHover(ev, d){
   tip.innerHTML = '';
   tip.appendChild(name);
   var val = document.createElement('div'); val.className='t-val';
+  if(mapYear!=null && scrubSupported()){
+    var hv = histValueAt(c.iso_code, mapYear);
+    val.textContent = t(m.mapLabel)+', '+mapYear+': '+(hv==null ? t('No data') : m.fmt(hv));
+    tip.appendChild(val);
+    tip.style.left = ev.clientX+'px';
+    tip.style.top = (ev.clientY-10)+'px';
+    tip.style.opacity = '1';
+    return;
+  }
   if(c[m.key]==null){ val.textContent = t('No data'); }
   else {
     val.textContent = t(m.mapLabel) + ': ' + m.fmt(c[m.key]);
@@ -495,7 +605,7 @@ function renderLegend(){
   }
   el.appendChild(wrap);
   var unit = document.createElement('span'); unit.className='legend-note'; unit.style.marginLeft='4px';
-  unit.textContent = t(m.legendUnit);
+  unit.textContent = t(m.legendUnit) + (m.vintage==='consumption' ? ' · '+CONS_YEAR : '');
   el.appendChild(unit);
   var note = document.createElement('span'); note.className='legend-note';
   note.innerHTML = '<span class="no-data-swatch"></span> ';
@@ -593,6 +703,14 @@ function renderPanel(){
   grid.appendChild(statBlock(t('Share of global CO₂'), fmtPct(c.share_global_co2)));
   grid.appendChild(statBlock(t('Share of warming'), fmtPct(c.share_of_temperature_change_from_ghg)));
   grid.appendChild(statBlock(t('Warming from its CO₂'), fmtC(c.temperature_change_from_co2)));
+  if(c.consumption_co2!=null){
+    grid.appendChild(statBlock(tf('Consumption CO₂, {y}',{y:CONS_YEAR}), fmtMt(c.consumption_co2)));
+    if(c.trade_co2!=null){
+      grid.appendChild(statBlock(
+        c.trade_co2>=0 ? t('Net CO₂ imports') : t('Net CO₂ exports'),
+        fmtMt(Math.abs(c.trade_co2))));
+    }
+  }
   body.appendChild(grid);
 
   var rk = rankOf(c.iso_code, state.metric);
@@ -969,6 +1087,11 @@ function renderCompareCard(){
     col.appendChild(cmpStat(t('Cumulative since 1750'), cmpVal(fmtMt(c.cumulative_co2))));
     col.appendChild(cmpStat(t('Share of warming'), cmpVal(fmtPct(c.share_of_temperature_change_from_ghg))));
     col.appendChild(cmpStat(t('Fair share'), cmpVal(c.fair_share_ratio!=null?fmtNum(c.fair_share_ratio,2)+'×':'—')));
+    col.appendChild(cmpStat(tf('Consumption CO₂, {y}',{y:CONS_YEAR}),
+      cmpVal(c.consumption_co2!=null?fmtMt(c.consumption_co2):'—')));
+    col.appendChild(cmpStat(
+      (c.trade_co2!=null && c.trade_co2<0) ? t('Net CO₂ exports') : t('Net CO₂ imports'),
+      cmpVal(c.trade_co2!=null?fmtMt(Math.abs(c.trade_co2)):'—')));
 
     var cagr = trendCAGR(iso);
     var tv = document.createElement('span'); tv.className='v';
@@ -1017,14 +1140,36 @@ function alignedValueAt(baseValue, baseYear, year){
 }
 
 function trendIsos(){ return state.pinned.length>=2 ? state.pinned : TOP_TREND_ISOS; }
+// 'total' | 'percap' -- history.json carries both series for every country
+var trendMode = 'total';
+function trendSeriesOf(h2){ return trendMode==='percap' ? h2.co2_per_capita : h2.co2; }
+function trendFmt(v){ return trendMode==='percap' ? fmtNum(v,1)+' t' : fmtMt(v); }
+function trendPledgeYear(iso){
+  var nz = NET_ZERO[iso];
+  return (nz && nz.year!=null) ? nz.year : null;
+}
 function renderTrendAll(){
   var pinnedMode = state.pinned.length>=2;
   document.getElementById('trend-title').textContent = pinnedMode
     ? tf('Your comparison, 1950–{y}',{y:LATEST_YEAR}) : tf('Who has driven the rise, 1950–{y}',{y:LATEST_YEAR});
-  document.getElementById('trend-desc').textContent = (pinnedMode
-    ? t('Annual territorial CO₂ emissions for your pinned countries.')
-    : t('Annual territorial CO₂ emissions for the six largest current emitters.'))
-    + (SHOW_ALIGNED ? ' '+tf('Dashed: a 1.5°C-consistent reference — straight-line decline to net zero by {y}, the global IPCC benchmark applied uniformly, not a national pledge.',{y:ALIGNED_ZERO_YEAR}) : '');
+  var base = trendMode==='percap'
+    ? (pinnedMode ? t('Per-person territorial CO₂ emissions for your pinned countries.')
+                  : t('Per-person territorial CO₂ emissions for the six largest current emitters.'))
+    : (pinnedMode ? t('Annual territorial CO₂ emissions for your pinned countries.')
+                  : t('Annual territorial CO₂ emissions for the six largest current emitters.'));
+  var hasPledge = trendIsos().some(function(iso){ return trendPledgeYear(iso)!=null; });
+  document.getElementById('trend-desc').textContent = base
+    + (SHOW_ALIGNED ? ' '+tf('Dashed: a 1.5°C-consistent reference — straight-line decline to net zero by {y}, the global IPCC benchmark applied uniformly, not a national pledge.',{y:ALIGNED_ZERO_YEAR}) : '')
+    + (hasPledge ? ' '+t('Dotted: each country’s own net-zero pledge.') : '');
+  var modeEl = document.getElementById('trend-mode');
+  modeEl.innerHTML = '';
+  [['total', t('Total')], ['percap', t('Per person')]].forEach(function(mm){
+    var b = document.createElement('button');
+    b.type='button'; b.className='metric-btn'+(trendMode===mm[0]?' active':'');
+    b.textContent = mm[1];
+    b.addEventListener('click', function(){ trendMode = mm[0]; renderTrendAll(); });
+    modeEl.appendChild(b);
+  });
   renderTrendLegend();
   renderTrendChart();
   renderTrendTable();
@@ -1045,6 +1190,13 @@ function renderTrendLegend(){
     chip2.appendChild(document.createTextNode(tf('1.5°C-aligned path → net zero {y}',{y:ALIGNED_ZERO_YEAR})));
     el.appendChild(chip2);
   }
+  if(trendIsos().some(function(iso){ return trendPledgeYear(iso)!=null; })){
+    var chip3 = document.createElement('div'); chip3.className='legend-chip';
+    var sw3 = document.createElement('span'); sw3.className='sw sw-dotted';
+    chip3.appendChild(sw3);
+    chip3.appendChild(document.createTextNode(t('national pledge → its net-zero year')));
+    el.appendChild(chip3);
+  }
 }
 function renderTrendChart(){
   var container = document.getElementById('trend-body');
@@ -1057,7 +1209,8 @@ function renderTrendChart(){
   var series = trendIsos().map(function(iso,i){
     var h2 = HISTORY[iso];
     if(!h2) return null;
-    var pts = h2.years.map(function(y,idx){return {x:y,y:h2.co2[idx]};}).filter(function(p){return p.y!=null && p.x>=1950;});
+    var vals = trendSeriesOf(h2);
+    var pts = h2.years.map(function(y,idx){return {x:y,y:vals[idx]};}).filter(function(p){return p.y!=null && p.x>=1950;});
     return {iso:iso, name:cnameIso(iso), color:'var('+CAT_HEX[i]+')', points:pts};
   }).filter(function(s){ return s && s.points.length; });
   if(!series.length){
@@ -1068,19 +1221,22 @@ function renderTrendChart(){
   }
   var xmin = d3.min(series, function(s){ return s.points[0].x; });
   var xmaxData = d3.max(series, function(s){ return s.points[s.points.length-1].x; });
-  var xmax = SHOW_ALIGNED ? ALIGNED_ZERO_YEAR : xmaxData;
+  // the axis must reach the latest pledge year on show (e.g. India 2070)
+  var pledgeMax = d3.max(series, function(s){ return trendPledgeYear(s.iso) || 0; }) || 0;
+  var xmax = Math.max(SHOW_ALIGNED ? ALIGNED_ZERO_YEAR : xmaxData, pledgeMax);
   var x = d3.scaleLinear().domain([xmin, xmax]).range([ml, w-mr]);
   var ymax = d3.max(series, function(s){ return d3.max(s.points, function(p){return p.y;}); });
   var y = d3.scaleLinear().domain([0, ymax*1.06]).range([h-mb, mt]);
 
   var g = svgEl.append('g');
   var ticks = y.ticks(5);
-  ticks.forEach(function(t){
-    g.append('line').attr('class','gridline').attr('x1',ml).attr('x2',w-mr).attr('y1',y(t)).attr('y2',y(t));
-    g.append('text').attr('class','axis-label').attr('x',ml-6).attr('y',y(t)+3).attr('text-anchor','end').text(fmtMt(t));
+  ticks.forEach(function(tv){
+    g.append('line').attr('class','gridline').attr('x1',ml).attr('x2',w-mr).attr('y1',y(tv)).attr('y2',y(tv));
+    g.append('text').attr('class','axis-label').attr('x',ml-6).attr('y',y(tv)+3).attr('text-anchor','end').text(trendFmt(tv));
   });
-  var yrTicks = (xmin===1950 && xmax===ALIGNED_ZERO_YEAR) ? [1950,1975,2000,2025,ALIGNED_ZERO_YEAR]
-    : (xmin===1950 && xmax===LATEST_YEAR) ? [1950,1975,2000,LATEST_YEAR] : x.ticks(4);
+  var yrTicks = xmin===1950
+    ? [1950,1975,2000,2025].filter(function(yy){ return yy<xmax-4; }).concat([xmax])
+    : x.ticks(4);
   yrTicks.forEach(function(yr){
     g.append('text').attr('class','axis-label').attr('x',x(yr)).attr('y',h-mb+16).attr('text-anchor','middle').text(yr);
   });
@@ -1096,6 +1252,11 @@ function renderTrendChart(){
     if(SHOW_ALIGNED){
       g.append('path').datum([{x:last.x, y:last.y}, {x:ALIGNED_ZERO_YEAR, y:0}])
         .attr('class','aligned-line').attr('d',line).style('stroke', s.color);
+    }
+    var py = trendPledgeYear(s.iso);
+    if(py!=null && py>last.x){
+      g.append('path').datum([{x:last.x, y:last.y}, {x:py, y:0}])
+        .attr('class','pledge-line').attr('d',line).style('stroke', s.color);
     }
     g.append('circle').attr('cx',x(last.x)).attr('cy',s.endY).attr('r',3.5).attr('class','trend-dot').style('fill', s.color);
   });
@@ -1141,7 +1302,7 @@ function renderTrendChart(){
     }).sort(function(a,b){ return (b.val||0)-(a.val||0); });
     var html = '<div class="ct-x">'+yr+(future?' · '+t('1.5°C-aligned path'):'')+'</div>';
     rows.forEach(function(r){
-      html += '<div class="ct-row"><span class="k"><span class="sw" style="background:'+r.color+'"></span>'+escapeHtml(r.name)+'</span><span class="v">'+fmtMt(r.val)+'</span></div>';
+      html += '<div class="ct-row"><span class="k"><span class="sw" style="background:'+r.color+'"></span>'+escapeHtml(r.name)+'</span><span class="v">'+trendFmt(r.val)+'</span></div>';
     });
     tooltip.innerHTML = html;
     tooltip.style.left = Math.min(ev.clientX - bbox.left + 14, bbox.width-160)+'px';
@@ -1165,8 +1326,8 @@ function renderTrendTable(){
     isos.forEach(function(iso){
       var h2 = HISTORY[iso];
       var idx = h2.years.indexOf(yr);
-      var v = idx>=0 ? h2.co2[idx] : null;
-      html += '<td>'+fmtMt(v)+'</td>';
+      var v = idx>=0 ? trendSeriesOf(h2)[idx] : null;
+      html += '<td>'+(v==null?'—':trendFmt(v))+'</td>';
     });
     html += '</tr>';
   });
@@ -2218,6 +2379,7 @@ function currentViewParams(){
   if(state.pinned.length) p.set('pin', state.pinned.join(','));
   if(!scenarioIsDefault()) p.set('scenario', scenarioState.group+'-'+scenarioState.reduction+'-'+scenarioState.year);
   if(lang!=='en') p.set('lang', lang);
+  if(embedKey) p.set('embed', embedKey);
   return p;
 }
 function syncUrl(){
@@ -2235,6 +2397,8 @@ function applyUrlState(){
       lang = urlLang;
       try{ localStorage.setItem('carbon-ledger-lang', urlLang); }catch(e){}
     }
+    var emb = p.get('embed');
+    if(emb && EMBED_TARGETS[emb]) embedKey = emb;
     // short view code wins over the legacy long-form params
     var dv = decodeViewCode(p.get('v'));
     if(dv){
@@ -2265,10 +2429,16 @@ function shareUrl(){
 }
 function updateSharePopover(){
   document.getElementById('share-link-input').value = shortShareUrl();
-  var embedSrc = ARTIFACT_URL + '?v=' + encodeViewCode();
+  var base = (location.protocol==='http:'||location.protocol==='https:')
+    ? (location.origin+location.pathname) : ARTIFACT_URL;
+  var tgt = document.getElementById('share-embed-target').value;
+  var embedSrc = base + '?v=' + encodeViewCode()
+    + (lang!=='en' ? '&lang='+lang : '') + (tgt ? '&embed='+tgt : '');
+  var height = tgt ? 560 : 900;
   document.getElementById('share-embed-input').value =
-    '<iframe src="'+embedSrc+'" width="100%" height="900" style="border:0;border-radius:12px;" loading="lazy"></iframe>';
+    '<iframe src="'+embedSrc+'" width="100%" height="'+height+'" style="border:0;border-radius:12px;" loading="lazy"></iframe>';
 }
+document.getElementById('share-embed-target').addEventListener('change', updateSharePopover);
 var sharePop = document.getElementById('share-popover');
 document.getElementById('share-open-btn').addEventListener('click', function(){
   var willShow = sharePop.hidden;
@@ -2342,7 +2512,7 @@ document.getElementById('share-download-csv-btn').addEventListener('click', func
 // using only URL-safe literal characters. Short links
 // carry it as ?v=<code>; saved views store the same code in localStorage, so
 // one parser serves both.
-var METRIC_CODES = { co2:'c', co2_per_capita:'p', cumulative_co2:'m',
+var METRIC_CODES = { co2:'c', consumption_co2:'n', co2_per_capita:'p', cumulative_co2:'m',
   share_of_temperature_change_from_ghg:'w', fair_share_ratio:'f' };
 var METRIC_FROM_CODE = {};
 Object.keys(METRIC_CODES).forEach(function(k){ METRIC_FROM_CODE[METRIC_CODES[k]] = k; });
@@ -2367,7 +2537,7 @@ function decodeViewCode(code){
   if(!code) return null;
   var seg = String(code).split('.');
   // the [ld] theme suffix is legacy — accepted so old links parse, ignored
-  var m1 = /^([cpmwf])([ld])?$/.exec(seg[0]||'');
+  var m1 = /^([cpmwfn])([ld])?$/.exec(seg[0]||'');
   if(!m1) return null;
   var v = { metric: METRIC_FROM_CODE[m1[1]], theme: null };
   v.pinned = (seg[1]||'').split('-').filter(function(iso,i,a){
@@ -2908,6 +3078,13 @@ function renderOnePager(iso){
         ? tf(' — <b>{p}%</b> of all industrial-era CO₂',{p:fmtNum(c.share_global_cumulative_co2,2)}) : ''
     }));
   }
+  if(c.consumption_co2!=null && c.trade_co2!=null){
+    items.push(tf('On a consumption basis ({y}), it accounts for <b>{v}</b> — a net {dir} of <b>{tv}</b> of CO₂ embedded in trade, {p}% of its territorial emissions.',{
+      y:CONS_YEAR, v:fmtMt(c.consumption_co2),
+      dir: c.trade_co2>=0 ? t('importer') : t('exporter'),
+      tv:fmtMt(Math.abs(c.trade_co2)), p:fmtNum(Math.abs(c.trade_co2_share),0)
+    }));
+  }
   if(alignedRate!=null){
     items.push(tf('A 1.5°C-consistent path — the global IPCC benchmark applied uniformly, not a national pledge — implies cutting about <b>{r}%</b> of the {y} level each year, reaching net-zero CO₂ by <b>{z}</b>. {nz}.',{
       r:fmtNum(alignedRate,1), y:LATEST_YEAR, z:ALIGNED_ZERO_YEAR, nz:escapeHtml(nzText)
@@ -2977,11 +3154,133 @@ document.getElementById('onepager-overlay').addEventListener('click', function(e
   if(e.target.id==='onepager-overlay') this.hidden = true;
 });
 
+/* ================= command palette (Cmd/Ctrl+K) ================= */
+var paletteIdx = 0;
+function paletteActions(){
+  var acts = [
+    { label: t('Guided tour'), run: openStory },
+    { label: t('Save this view'), run: function(){ document.getElementById('views-open-btn').click(); } },
+    { label: t('Share card')+' — '+t('Deck 16:9'), run: function(){ openCardPreview('deck'); } },
+    { label: t('Clear comparison'), run: function(){
+        state.pinned = [];
+        if(scenarioState.group==='pinned') scenarioState.group='top6';
+        renderPinned();
+      } }
+  ];
+  if(state.selectedIso){
+    acts.push({ label: t('⎙ One-pager (PDF)')+' — '+cnameIso(state.selectedIso),
+      run: function(){ openOnePager(state.selectedIso); } });
+  }
+  METRICS.forEach(function(m){
+    acts.push({ label: t('Metric: ')+t(m.label), run: function(){ setMetric(m.key); } });
+  });
+  Object.keys(LANG_DEFS).forEach(function(l){
+    if(l!==lang) acts.push({ label: t('Language: ')+{en:'English',es:'Español',fr:'Français'}[l],
+      run: function(){ setLang(l); } });
+  });
+  return acts;
+}
+function paletteResults(q){
+  q = q.toLowerCase().trim();
+  var acts = paletteActions();
+  if(!q) return acts.slice(0,9);
+  var hits = acts.filter(function(a){ return a.label.toLowerCase().indexOf(q)>-1; });
+  COUNTRIES.filter(function(c){
+    return c.co2!=null && (c.country.toLowerCase().indexOf(q)>-1 || cname(c).toLowerCase().indexOf(q)>-1);
+  }).sort(function(a,b){ return b.co2-a.co2; }).slice(0, 9-Math.min(hits.length,4))
+    .forEach(function(c){
+      hits.push({ label: cname(c), hint: fmtMt(c.co2), run: function(){
+        selectCountry(c.iso_code);
+        document.querySelector('.map-card').scrollIntoView({behavior:'smooth', block:'start'});
+      } });
+    });
+  return hits.slice(0,9);
+}
+function renderPalette(){
+  var list = document.getElementById('palette-list');
+  var q = document.getElementById('palette-input').value;
+  var results = paletteResults(q);
+  paletteIdx = Math.min(paletteIdx, Math.max(0, results.length-1));
+  list.innerHTML = '';
+  results.forEach(function(r, i){
+    var b = document.createElement('button'); b.type='button';
+    b.className = 'palette-item'+(i===paletteIdx?' active':'');
+    b.setAttribute('role','option');
+    var l = document.createElement('span'); l.textContent = r.label;
+    b.appendChild(l);
+    if(r.hint){ var h = document.createElement('span'); h.className='ph'; h.textContent = r.hint; b.appendChild(h); }
+    b.addEventListener('click', function(){ closePalette(); r.run(); });
+    list.appendChild(b);
+  });
+  list.__results = results;
+}
+function openPalette(){
+  var ov = document.getElementById('palette-overlay');
+  ov.hidden = false;
+  var input = document.getElementById('palette-input');
+  input.value = '';
+  input.placeholder = t('Type a country or command…');
+  paletteIdx = 0;
+  renderPalette();
+  input.focus();
+}
+function closePalette(){ document.getElementById('palette-overlay').hidden = true; }
+document.getElementById('palette-input').addEventListener('input', function(){ paletteIdx = 0; renderPalette(); });
+document.getElementById('palette-input').addEventListener('keydown', function(e){
+  var results = document.getElementById('palette-list').__results || [];
+  if(e.key==='ArrowDown'){ paletteIdx = (paletteIdx+1)%results.length; renderPalette(); e.preventDefault(); }
+  else if(e.key==='ArrowUp'){ paletteIdx = (paletteIdx-1+results.length)%results.length; renderPalette(); e.preventDefault(); }
+  else if(e.key==='Enter' && results[paletteIdx]){ closePalette(); results[paletteIdx].run(); e.preventDefault(); }
+});
+document.getElementById('palette-overlay').addEventListener('click', function(e){
+  if(e.target.id==='palette-overlay') closePalette();
+});
+document.addEventListener('keydown', function(e){
+  if((e.metaKey || e.ctrlKey) && e.key==='k'){
+    e.preventDefault();
+    var ov = document.getElementById('palette-overlay');
+    if(ov.hidden) openPalette(); else closePalette();
+  }
+});
+
+/* ================= embed mode (?embed=<card>) ================= */
+// Chromeless single-card rendering for iframes: hides everything except the
+// chosen card plus a small attribution bar linking back to the full view.
+var EMBED_TARGETS = {
+  map:'.cell-map', trend:'#trend-card', sectors:'#sectors-card',
+  area:'#area-card', targets:'.cell-targets', scenario:'.cell-scenario',
+  resp:'.cell-resp', compare:'#compare-card'
+};
+var embedKey = null;
+function applyEmbedMode(){
+  try{
+    // embedKey is captured in applyUrlState, before the first syncUrl()
+    // rewrites the address bar
+    var key = embedKey;
+    if(!key || !EMBED_TARGETS[key]) return;
+    document.documentElement.classList.add('embed-mode');
+    var target = document.querySelector(EMBED_TARGETS[key]);
+    document.querySelectorAll('.bento > *').forEach(function(el){
+      if(el!==target && !el.contains(target)) el.style.display = 'none';
+    });
+    var credit = document.createElement('div');
+    credit.className = 'embed-credit';
+    var a = document.createElement('a');
+    a.href = shareUrl(); a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = t('Open the full dashboard');
+    credit.appendChild(document.createTextNode('Carbon Ledger · GCP/OWID (CC BY 4.0) · '));
+    credit.appendChild(a);
+    document.querySelector('main.wrap').appendChild(credit);
+  }catch(e){}
+}
+
 /* ================= global keyboard ================= */
 // Escape dismisses whatever is topmost: overlays first, then popovers, then
 // the compare-search dropdown. Focus returns to the control that opened it.
 document.addEventListener('keydown', function(e){
   if(e.key!=='Escape') return;
+  var palOv = document.getElementById('palette-overlay');
+  if(!palOv.hidden){ closePalette(); return; }
   var opOv = document.getElementById('onepager-overlay');
   if(!opOv.hidden){ opOv.hidden = true; return; }
   var cardOv = document.getElementById('card-overlay');
@@ -2996,6 +3295,7 @@ document.addEventListener('keydown', function(e){
 /* ================= orchestration ================= */
 function renderAll(){
   renderKPIs();
+  renderBudget();
   renderMetricPicker();
   renderCompareTray();
   renderCompareCard();
@@ -3035,7 +3335,7 @@ captureStaticI18n([
   '.onepager-frame .story-eyebrow', '.onepager-frame .card-preview-hint',
   '#onepager-print-btn', '#onepager-close-btn',
   '#card-overlay .story-eyebrow', '#card-copy-btn', '#card-download-btn', '#card-close-btn',
-  '#story-prev-btn',
+  '#story-prev-btn', '#share-embed-target option',
   'footer p:not(.footer-downloads)', '.footer-downloads .lbl',
   'details.note-wrap summary',
   '.pf-promo .pt'
@@ -3044,6 +3344,7 @@ applyUrlState();
 applyStaticI18n();
 applyYearLabels();
 renderAll();
+applyEmbedMode();
 if(new URLSearchParams(location.search).get('tour')==='1'){ openStory(); }
 window.addEventListener('resize', function(){ /* svg uses viewBox, no rebuild needed */ });
 }

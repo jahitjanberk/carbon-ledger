@@ -7,6 +7,36 @@
 window.CL_I18N = { dict: {
 
 es: {
+  'Consumption': 'Consumo',
+  'Consumption-based CO₂': 'CO₂ basado en el consumo',
+  'Consumption CO₂, {y}': 'CO₂ de consumo, {y}',
+  'Net CO₂ imports': 'Importaciones netas de CO₂',
+  'Net CO₂ exports': 'Exportaciones netas de CO₂',
+  'importer': 'importador', 'exporter': 'exportador',
+  'On a consumption basis ({y}), it accounts for <b>{v}</b> — a net {dir} of <b>{tv}</b> of CO₂ embedded in trade, {p}% of its territorial emissions.':
+    'En términos de consumo ({y}), le corresponden <b>{v}</b> — {dir} neto de <b>{tv}</b> de CO₂ incorporado al comercio, el {p} % de sus emisiones territoriales.',
+  'Total': 'Total',
+  'Per-person territorial CO₂ emissions for your pinned countries.':
+    'Emisiones territoriales de CO₂ por persona de tus países fijados.',
+  'Per-person territorial CO₂ emissions for the six largest current emitters.':
+    'Emisiones territoriales de CO₂ por persona de los seis mayores emisores actuales.',
+  'Dotted: each country’s own net-zero pledge.': 'Punteada: la promesa de cero neto de cada país.',
+  'national pledge → its net-zero year': 'promesa nacional → su año de cero neto',
+  'Remaining 1.5°C carbon budget': 'Presupuesto de carbono restante para 1,5 °C',
+  'of {b} Gt from {y} · IPCC AR6, 50% chance': 'de {b} Gt desde {y} · IPCC AR6, 50 % de probabilidad',
+  '{s} Gt emitted since {y}': '{s} Gt emitidas desde {y}',
+  'Exhausted': 'Agotado',
+  '≈{n} years at the current rate — gone around {yr}': '≈{n} años al ritmo actual — se agota hacia {yr}',
+  'overspent by {v} Gt': 'sobrepasado en {v} Gt',
+  '2°C (67% chance): {v} Gt left, ≈{n} years': '2 °C (67 % de probabilidad): quedan {v} Gt, ≈{n} años',
+  'Play': 'Reproducir', 'Pause': 'Pausa',
+  'Type a country or command…': 'Escribe un país o un comando…',
+  'Clear comparison': 'Borrar la comparación',
+  'Metric: ': 'Métrica: ', 'Language: ': 'Idioma: ',
+  'Whole page': 'Página completa', 'Map': 'Mapa', 'Trend': 'Tendencia',
+  'Sectors': 'Sectores', 'Sources': 'Fuentes', 'Targets': 'Metas', 'Scenario': 'Escenario',
+  'Open the full dashboard': 'Abrir el panel completo',
+
   'Methodology &amp; sources': 'Metodología y fuentes',
   'Download the data:': 'Descargar los datos:',
   'Shift-click to pin for comparison': 'Mayús+clic para fijarlo en la comparación',
@@ -404,6 +434,36 @@ es: {
 },
 
 fr: {
+  'Consumption': 'Consommation',
+  'Consumption-based CO₂': 'CO₂ fondé sur la consommation',
+  'Consumption CO₂, {y}': 'CO₂ de consommation, {y}',
+  'Net CO₂ imports': 'Importations nettes de CO₂',
+  'Net CO₂ exports': 'Exportations nettes de CO₂',
+  'importer': 'importateur', 'exporter': 'exportateur',
+  'On a consumption basis ({y}), it accounts for <b>{v}</b> — a net {dir} of <b>{tv}</b> of CO₂ embedded in trade, {p}% of its territorial emissions.':
+    'En termes de consommation ({y}), il compte <b>{v}</b> — {dir} net de <b>{tv}</b> de CO₂ incorporé aux échanges, soit {p} % de ses émissions territoriales.',
+  'Total': 'Total',
+  'Per-person territorial CO₂ emissions for your pinned countries.':
+    'Émissions territoriales de CO₂ par personne de vos pays épinglés.',
+  'Per-person territorial CO₂ emissions for the six largest current emitters.':
+    'Émissions territoriales de CO₂ par personne des six premiers émetteurs actuels.',
+  'Dotted: each country’s own net-zero pledge.': 'Pointillé fin : l’engagement zéro net propre à chaque pays.',
+  'national pledge → its net-zero year': 'engagement national → son année zéro net',
+  'Remaining 1.5°C carbon budget': 'Budget carbone restant pour 1,5 °C',
+  'of {b} Gt from {y} · IPCC AR6, 50% chance': 'sur {b} Gt depuis {y} · GIEC AR6, 50 % de chances',
+  '{s} Gt emitted since {y}': '{s} Gt émises depuis {y}',
+  'Exhausted': 'Épuisé',
+  '≈{n} years at the current rate — gone around {yr}': '≈{n} ans au rythme actuel — épuisé vers {yr}',
+  'overspent by {v} Gt': 'dépassé de {v} Gt',
+  '2°C (67% chance): {v} Gt left, ≈{n} years': '2 °C (67 % de chances) : {v} Gt restantes, ≈{n} ans',
+  'Play': 'Lecture', 'Pause': 'Pause',
+  'Type a country or command…': 'Tapez un pays ou une commande…',
+  'Clear comparison': 'Effacer la comparaison',
+  'Metric: ': 'Métrique : ', 'Language: ': 'Langue : ',
+  'Whole page': 'Page entière', 'Map': 'Carte', 'Trend': 'Tendance',
+  'Sectors': 'Secteurs', 'Sources': 'Sources', 'Targets': 'Objectifs', 'Scenario': 'Scénario',
+  'Open the full dashboard': 'Ouvrir le tableau de bord complet',
+
   'Methodology &amp; sources': 'Méthodologie et sources',
   'Download the data:': 'Télécharger les données :',
   'Shift-click to pin for comparison': 'Maj+clic pour l’épingler à la comparaison',

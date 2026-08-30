@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Carbon Ledger</title>
 <meta name="description" content="Country-level CO2 emissions and their share of observed warming, built from the Global Carbon Project via Our World in Data.">
+<!-- Social unfurls. Absolute URLs are required by scrapers; these assume
+     GitHub Pages — update the two *.github.io URLs if deploying elsewhere. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Carbon Ledger">
+<meta property="og:description" content="Country-level CO2 emissions and their share of observed warming — compare countries, sectors, trajectories, and the 1.5°C path.">
+<meta property="og:url" content="https://jahitjanberk.github.io/carbon-ledger/">
+<meta property="og:image" content="https://jahitjanberk.github.io/carbon-ledger/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%3Cstop%20offset='0'%20stop-color='%232a78d6'/%3E%3Cstop%20offset='1'%20stop-color='%231baf7a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle%20cx='50'%20cy='50'%20r='42'%20fill='url(%23g)'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="src/css/styles.css">
 </head>
@@ -56,6 +66,15 @@
           <div>
             <h3>Embed</h3>
             <div class="row-label">Paste into a page or newsletter.</div>
+            <select id="share-embed-target" style="margin-bottom:6px;width:100%;border:1px solid var(--border-strong);background:var(--surface-card);color:var(--text-primary);padding:6px 8px;border-radius:7px;font-size:12px;">
+              <option value="">Whole page</option>
+              <option value="map">Map</option>
+              <option value="trend">Trend</option>
+              <option value="sectors">Sectors</option>
+              <option value="area">Sources</option>
+              <option value="targets">Targets</option>
+              <option value="scenario">Scenario</option>
+            </select>
             <textarea id="share-embed-input" rows="3" readonly></textarea>
           </div>
           <div class="popover-actions">
@@ -129,6 +148,10 @@
   <div class="bento">
     <section class="kpis" id="kpi-row" aria-label="Global headline figures"></section>
 
+    <div class="card cell-budget" id="budget-card">
+      <div class="budget-body" id="budget-body"></div>
+    </div>
+
     <div class="card map-card cell-map">
       <div class="card-head">
         <div>
@@ -140,6 +163,11 @@
       <div class="card-body map-stage">
         <svg id="map-svg" viewBox="0 0 960 520" role="img" aria-label="World map choropleth of CO2 emissions by country"></svg>
         <div class="map-tooltip" id="map-tooltip"></div>
+        <div class="map-scrub" id="map-scrub" hidden>
+          <button type="button" class="icon-btn" id="scrub-play" aria-label="Play">&#9654;</button>
+          <input type="range" id="scrub-range" min="1950" step="1" aria-label="Year">
+          <span class="scrub-year num" id="scrub-year"></span>
+        </div>
       </div>
     </div>
 
@@ -191,7 +219,10 @@
           <h2 id="trend-title">Who has driven the rise, 1950&ndash;2024</h2>
           <div class="desc" id="trend-desc">Annual territorial CO&#8322; emissions for the six largest current emitters.</div>
         </div>
-        <button class="table-toggle" data-table-toggle="trend-table">View as table</button>
+        <div style="display:flex;gap:6px;flex:none;align-items:flex-start;">
+          <div class="chip-group" id="trend-mode"></div>
+          <button class="table-toggle" data-table-toggle="trend-table">View as table</button>
+        </div>
       </div>
       <div class="legend-chips" id="trend-legend"></div>
       <div class="card-body" id="trend-body"></div>
@@ -374,6 +405,13 @@
       <button type="button" class="linklike" id="share-download-json-btn">JSON</button></p>
   </footer>
 </main>
+</div>
+
+<div class="story-overlay" id="palette-overlay" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <input type="text" id="palette-input" autocomplete="off" spellcheck="false">
+    <div class="palette-list" id="palette-list" role="listbox"></div>
+  </div>
 </div>
 
 <!-- direct child of body: the print stylesheet hides body > * except this -->

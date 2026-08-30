@@ -78,6 +78,33 @@ the map, the ranking and the table alike. Grid cells are named `.cell-map`,
 `.cell-area`, `.cell-targets`, `.cell-scenario` and `.cell-table` in
 `src/css/styles.css`.
 
+The metric picker includes consumption-based (trade-adjusted) CO₂ — OWID's
+`consumption_co2` family, which lags territorial data upstream, so the
+pipeline records its own vintage in `meta.json` and every label carries it.
+The panel, compare card, and one-pager show net CO₂ embedded in trade.
+
+A carbon-budget strip under the KPIs tracks the remaining IPCC AR6 1.5°C
+budget (500 Gt from 2020, 50% chance) minus emissions since, with a
+years-left countdown and the 2°C figure alongside.
+
+The trend chart has a Total / Per-person toggle (history.json carries both
+series) and, beside the dashed 1.5°C reference, dotted lines showing each
+country's own net-zero pledge path — the axis stretches to the latest pledge
+year on show (India's 2070).
+
+The map has a time scrubber (1950 → latest, play button) for the metrics
+with per-year history; the color scale stays fixed at the latest-year domain
+so shades are comparable across years.
+
+⌘K / Ctrl+K opens a command palette: jump to a country, switch metric or
+language, open the tour, save a view, export.
+
+`?embed=trend` (or map/sectors/area/targets/scenario) renders one card
+chromeless for iframes with an attribution link back; the share popover's
+embed snippet has a card selector. OG/twitter meta tags point at
+`assets/og.png` (regenerate via the share-card exporter; update the absolute
+URLs in index.html if not deploying to GitHub Pages).
+
 The portfolio overlay card takes a holdings list (pasted lines, a CSV file,
 or the built-in sample — `country, weight` in any unit, normalized) and maps
 it onto country-level exposure: weighted per-capita CO₂ vs. the world
