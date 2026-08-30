@@ -1,0 +1,12 @@
+{
+  "name": "carbon-ledger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Country-level CO2 emissions and their share of observed warming, built from the Global Carbon Project via Our World in Data.",
+  "scripts": {
+    "start": "npx --yes serve . --listen 5173",
+    "dev": "npm start"
+  },
+  "keywords": ["co2", "emissions", "climate", "d3", "dataviz"],
+  "license": "MIT"
+}

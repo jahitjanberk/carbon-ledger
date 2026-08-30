@@ -1,0 +1,13 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "title": "Carbon Ledger — Bento", "x": 0, "y": 0, "w": 1360, "h": 2100 }
+  ],
+  "annotations": [
+    {
+      "id": "intro",
+      "x": 0, "y": -150, "w": 620,
+      "text": "Bento layout, Inter throughout — display, body and the numeric columns.\n\nEverything else is unchanged from the app: the color tokens, the 14px card radii, the sequential and categorical ramps, and the real 2024 figures from /data."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}
