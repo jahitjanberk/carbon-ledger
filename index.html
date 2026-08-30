@@ -19,15 +19,33 @@
       <p>Country-level CO&#8322; emissions and their share of observed warming, built from the Global Carbon Project via Our World in Data.</p>
     </div>
     <div class="top-actions">
-      <span class="as-of">Latest year: 2024</span>
+      <span class="as-of" id="as-of-label">Latest year: 2024</span>
       <button type="button" class="util-btn primary" id="story-open-btn">Guided tour</button>
+      <div class="popover-wrap">
+        <button type="button" class="util-btn" id="views-open-btn" aria-haspopup="true" aria-expanded="false">&#9734; Saved views</button>
+        <div class="popover" id="views-popover" hidden>
+          <button type="button" class="popover-close" id="views-close-btn" aria-label="Close">&times;</button>
+          <div>
+            <h3>Save this view</h3>
+            <div class="row-label">Country set, metric, and scenario &mdash; one click brings it all back.</div>
+            <input type="text" id="view-name-input" maxlength="60" placeholder="Name this view">
+          </div>
+          <div class="popover-actions">
+            <button type="button" class="util-btn primary" id="view-save-btn">&#9733; Save view</button>
+          </div>
+          <div>
+            <h3>Your saved views</h3>
+            <div class="views-list" id="views-list"></div>
+          </div>
+        </div>
+      </div>
       <div class="popover-wrap">
         <button type="button" class="util-btn" id="share-open-btn" aria-haspopup="true" aria-expanded="false">Share &amp; reuse</button>
         <div class="popover" id="share-popover" hidden>
           <button type="button" class="popover-close" id="share-close-btn" aria-label="Close">&times;</button>
           <div>
             <h3>Link to this view</h3>
-            <div class="row-label">Updates as you change the metric, country, or theme.</div>
+            <div class="row-label">A short link carrying the metric, country set, scenario, and theme.</div>
             <input type="text" id="share-link-input" readonly>
           </div>
           <div class="popover-actions">
@@ -40,6 +58,14 @@
           </div>
           <div class="popover-actions">
             <button type="button" class="util-btn" id="share-copy-embed-btn">Copy embed code</button>
+          </div>
+          <div>
+            <h3>Share card</h3>
+            <div class="row-label">A citation-ready PNG of the current view, sized for a deck or a social post.</div>
+          </div>
+          <div class="popover-actions">
+            <button type="button" class="util-btn" id="share-card-deck-btn">Deck 16:9</button>
+            <button type="button" class="util-btn" id="share-card-social-btn">Social 1200&times;630</button>
           </div>
           <div>
             <h3>Download the data</h3>
@@ -76,8 +102,35 @@
   </div>
 </div>
 
+<div class="story-overlay" id="card-overlay" hidden>
+  <div class="story-card card-preview" role="dialog" aria-modal="true" aria-label="Share card preview">
+    <div class="story-eyebrow">Share card</div>
+    <img id="card-preview-img" alt="Preview of the generated share card">
+    <div class="card-preview-meta" id="card-preview-meta"></div>
+    <div class="story-foot">
+      <div class="card-preview-hint" id="card-preview-hint"></div>
+      <div class="story-nav">
+        <button type="button" class="util-btn" id="card-copy-btn">Copy image</button>
+        <button type="button" class="util-btn primary" id="card-download-btn">Download PNG</button>
+        <button type="button" class="util-btn" id="card-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <main class="wrap" style="padding-left:0;padding-right:0;">
   <div class="metric-picker global" id="metric-picker" role="group" aria-label="Map metric"></div>
+
+  <div class="compare-tray" id="compare-tray">
+    <span class="tray-label">Compare</span>
+    <div class="tray-chips" id="compare-chips"></div>
+    <div class="tray-add">
+      <input type="text" id="compare-search" placeholder="Add a country&hellip;" autocomplete="off" aria-label="Add a country to compare">
+      <div class="tray-suggest" id="compare-suggest" hidden></div>
+    </div>
+    <button type="button" class="util-btn" id="compare-clear" hidden>Clear</button>
+    <span class="tray-hint" id="compare-hint"></span>
+  </div>
 
   <div class="bento">
     <section class="kpis" id="kpi-row" aria-label="Global headline figures"></section>
@@ -85,8 +138,8 @@
     <div class="card map-card cell-map">
       <div class="card-head">
         <div>
-          <h2>Emissions by country, 2024</h2>
-          <div class="desc">Click a country for its detail and trend. Choose a metric above &mdash; the ranking and top-15 chart update with it.</div>
+          <h2 id="map-title">Emissions by country, 2024</h2>
+          <div class="desc">Click a country for its detail and trend; shift-click pins it to the comparison. Choose a metric above &mdash; the ranking and top-15 chart update with it.</div>
         </div>
       </div>
       <div class="legend-row" id="legend-row"></div>
@@ -115,11 +168,21 @@
       </div>
     </div>
 
+    <div class="card cell-compare" id="compare-card" hidden>
+      <div class="card-head">
+        <div>
+          <h2>Side by side</h2>
+          <div class="desc" id="compare-desc"></div>
+        </div>
+      </div>
+      <div class="card-body compare-cols" id="compare-cols"></div>
+    </div>
+
     <div class="card cell-trend" id="trend-card">
       <div class="card-head">
         <div>
-          <h2>Who has driven the rise, 1950&ndash;2024</h2>
-          <div class="desc">Annual territorial CO&#8322; emissions for the six largest current emitters.</div>
+          <h2 id="trend-title">Who has driven the rise, 1950&ndash;2024</h2>
+          <div class="desc" id="trend-desc">Annual territorial CO&#8322; emissions for the six largest current emitters.</div>
         </div>
         <button class="table-toggle" data-table-toggle="trend-table">View as table</button>
       </div>
@@ -147,10 +210,24 @@
       </div>
     </div>
 
+    <div class="card cell-sectors" id="sectors-card">
+      <div class="card-head">
+        <div>
+          <h2 id="sectors-title">Emissions by sector</h2>
+          <div class="desc" id="sectors-desc"></div>
+        </div>
+        <button class="table-toggle" data-table-toggle="sectors-table">View as table</button>
+      </div>
+      <div class="legend-chips" id="sectors-legend"></div>
+      <div class="card-body" id="sectors-body"></div>
+      <div class="card-body" id="sectors-table" hidden></div>
+      <div class="scenario-note" id="sectors-note"></div>
+    </div>
+
     <div class="card cell-area" id="area-card">
       <div class="card-head">
         <div>
-          <h2>Global emissions by source, 1900&ndash;2024</h2>
+          <h2 id="area-title">Global emissions by source, 1900&ndash;2024</h2>
           <div class="desc">Coal has been the largest single contributor to cumulative CO&#8322; for most of the industrial era; oil and gas caught up through the 20th century.</div>
         </div>
         <button class="table-toggle" data-table-toggle="area-table">View as table</button>
@@ -172,13 +249,13 @@
           <div class="table-wrap">
           <table class="data-table" id="targets-table">
             <thead><tr>
-              <th>Country</th><th>CO&#8322;, 2024</th><th>10-yr trend</th><th>Net-zero target</th>
+              <th>Country</th><th id="targets-co2-th">CO&#8322;, 2024</th><th>10-yr trend</th><th>Net-zero target</th>
             </tr></thead>
             <tbody id="targets-table-body"></tbody>
           </table>
           </div>
         </div>
-        <div class="scenario-note" style="padding:12px 0 0;">Trend is the compound annual growth rate of territorial CO&#8322; over 2014&ndash;2024. Net-zero targets: <a href="https://eciu.net/netzerotracker" target="_blank" rel="noopener">Energy &amp; Climate Intelligence Unit Net Zero Tracker</a>; the United States is shown as having no active national target following its 2025 withdrawal from the Paris Agreement.</div>
+        <div class="scenario-note" style="padding:12px 0 0;">Trend is the compound annual growth rate of territorial CO&#8322; over <span id="targets-trend-range">2014&ndash;2024</span>. Net-zero targets: <a href="https://eciu.net/netzerotracker" target="_blank" rel="noopener">Energy &amp; Climate Intelligence Unit Net Zero Tracker</a>; the United States is shown as having no active national target following its 2025 withdrawal from the Paris Agreement.</div>
       </div>
     </div>
 
@@ -214,13 +291,13 @@
       <div class="scenario-results" id="scenario-results"></div>
       <div class="scenario-chart-legend" id="scenario-legend"></div>
       <div class="card-body" id="scenario-body"></div>
-      <div class="scenario-note">Simplified, illustrative model &mdash; not a forecast. Assumes the selected countries' emissions would otherwise hold flat at 2024 levels, declining in a straight line to the target year and staying flat after. Avoided warming applies IPCC AR6&rsquo;s transient climate response to cumulative emissions (TCRE): a likely range of 0.27&ndash;0.63&deg;C per 1,000 Gt CO&#8322;, central estimate &asymp;0.45&deg;C. Real trajectories also depend on non-CO&#8322; gases, carbon-cycle feedbacks, and what every other country does.</div>
+      <div class="scenario-note">Simplified, illustrative model &mdash; not a forecast. Assumes the selected countries' emissions would otherwise hold flat at <span id="scenario-base-year">2024</span> levels, declining in a straight line to the target year and staying flat after. Avoided warming applies IPCC AR6&rsquo;s transient climate response to cumulative emissions (TCRE): a likely range of 0.27&ndash;0.63&deg;C per 1,000 Gt CO&#8322;, central estimate &asymp;0.45&deg;C. Real trajectories also depend on non-CO&#8322; gases, carbon-cycle feedbacks, and what every other country does.</div>
     </div>
 
     <div class="card cell-table">
       <div class="card-head">
         <div>
-          <h2>All countries, 2024</h2>
+          <h2 id="table-title">All countries, 2024</h2>
           <div class="desc">Full underlying dataset &mdash; the accessible, sortable twin of the map and rankings above.</div>
         </div>
       </div>
@@ -250,7 +327,7 @@
   </div>
 
   <footer>
-    <p>Data: Global Carbon Project &amp; Our World in Data, <a href="https://github.com/owid/co2-data" target="_blank" rel="noopener">owid/co2-data</a> (CC BY 4.0), 2024 release. Country boundaries are simplified for display; a handful of small island states and territories aren&rsquo;t resolved on the map but remain in the table below. &ldquo;Share of warming&rdquo; is each country&rsquo;s share of the observed global temperature increase attributed to greenhouse gas emissions.</p>
+    <p>Data: Global Carbon Project &amp; Our World in Data, <a href="https://github.com/owid/co2-data" target="_blank" rel="noopener">owid/co2-data</a> (CC BY 4.0), <span id="data-release">2024 release</span>. Country boundaries are simplified for display; a handful of small island states and territories aren&rsquo;t resolved on the map but remain in the table below. &ldquo;Share of warming&rdquo; is each country&rsquo;s share of the observed global temperature increase attributed to greenhouse gas emissions.</p>
     <p>Income groups follow the World Bank classification as compiled by Our World in Data. Built as an interactive reference, not a forecast &mdash; figures are territorial production emissions unless noted.</p>
   </footer>
 </main>
