@@ -112,7 +112,20 @@ def build_from_co2_csv(text):
             out[k] = num(r.get(k))
         world.append(out)
 
-    # -- countries.json: every ISO3 entity with a row in the latest year
+    # -- countries.json: every ISO3 entity with a row in the latest year.
+    # Consumption-based (trade-adjusted) figures lag territorial data by a
+    # year or more upstream, so they are taken from their own latest year and
+    # that vintage is recorded in meta.json for honest labeling.
+    cons_years = [int(r['year']) for r in rows
+                  if r.get('consumption_co2') not in ('', None)
+                  and len(r.get('iso_code', '')) == 3 and not r['iso_code'].startswith('OWID')]
+    cons_year = max(cons_years) if cons_years else None
+    cons_by_iso = {}
+    if cons_year:
+        for r in rows:
+            iso = r.get('iso_code', '')
+            if len(iso) == 3 and not iso.startswith('OWID') and int(r['year']) == cons_year:
+                cons_by_iso[iso] = r
     countries = []
     latest_by_iso = {}
     for r in rows:
@@ -129,6 +142,9 @@ def build_from_co2_csv(text):
         c = {'country': r['country'], 'iso_code': iso, 'iso2': iso2_by_iso3.get(iso)}
         for k in COUNTRY_FIELDS:
             c[k] = num(r.get(k))
+        cr = cons_by_iso.get(iso, {})
+        for k in ('consumption_co2', 'consumption_co2_per_capita', 'trade_co2', 'trade_co2_share'):
+            c[k] = num(cr.get(k))
         countries.append(c)
     isos = set(latest_by_iso)
 
@@ -167,7 +183,7 @@ def build_from_co2_csv(text):
             'pop_share': round(float(r['population']) / world_pop * 100, 1),
         })
 
-    return latest, countries, world, hist, income
+    return latest, countries, world, hist, income, cons_year
 
 
 def build_sectors(text):
@@ -334,7 +350,7 @@ def main():
     sectors_text = fetch(SECTORS_CSV_URL)
     print('  %.1f MB' % (len(sectors_text) / 1e6))
 
-    latest, countries, world, hist, income, = build_from_co2_csv(co2_text)
+    latest, countries, world, hist, income, cons_year = build_from_co2_csv(co2_text)
     sectors = build_sectors(sectors_text)
     print('fetching %s ...' % EIA_STATE_XLSX_URL)
     subnational = build_subnational()
@@ -351,6 +367,7 @@ def main():
     meta = {
         'generated': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
         'co2_latest_year': latest,
+        'consumption_year': cons_year,
         'sectors_year': sectors['year'],
         'sources': {
             'co2': CO2_CSV_URL,
