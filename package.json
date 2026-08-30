@@ -5,7 +5,8 @@
   "description": "Country-level CO2 emissions and their share of observed warming, built from the Global Carbon Project via Our World in Data.",
   "scripts": {
     "start": "npx --yes serve . --listen 5173",
-    "dev": "npm start"
+    "dev": "npm start",
+    "refresh-data": "python3 scripts/refresh_data.py"
   },
   "keywords": ["co2", "emissions", "climate", "d3", "dataviz"],
   "license": "MIT"

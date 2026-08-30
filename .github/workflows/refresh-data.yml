@@ -1,0 +1,39 @@
+# Keeps /data honest without a manual rebuild.
+#
+# The Global Carbon Project releases annually (usually November), so this runs
+# a cheap monthly check: regenerate the snapshots from upstream and commit only
+# when something actually changed. scripts/refresh_data.py validates the fresh
+# data and exits non-zero rather than write a broken snapshot, so a bad
+# upstream day cannot reach the site. Static hosts that deploy from this repo
+# (GitHub Pages, Netlify, ...) pick the commit up automatically.
+name: Refresh data
+
+on:
+  schedule:
+    - cron: '23 6 3 * *'   # 06:23 UTC on the 3rd of every month
+  workflow_dispatch: {}     # and on demand from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerate data from upstream
+        run: python3 scripts/refresh_data.py
+
+      - name: Commit if anything changed
+        run: |
+          if git diff --quiet -- data/; then
+            echo "Data unchanged — nothing to commit."
+            exit 0
+          fi
+          year=$(python3 -c "import json; print(json.load(open('data/meta.json'))['co2_latest_year'])")
+          git config user.name "carbon-ledger-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/
+          git commit -m "data: refresh from upstream (CO2 through ${year})"
+          git push
