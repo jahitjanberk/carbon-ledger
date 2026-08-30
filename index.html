@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Carbon Ledger</title>
 <meta name="description" content="Country-level CO2 emissions and their share of observed warming, built from the Global Carbon Project via Our World in Data.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Cdefs%3E%3ClinearGradient%20id='g'%20x1='0'%20y1='0'%20x2='1'%20y2='1'%3E%3Cstop%20offset='0'%20stop-color='%232a78d6'/%3E%3Cstop%20offset='1'%20stop-color='%231baf7a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle%20cx='50'%20cy='50'%20r='42'%20fill='url(%23g)'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="src/css/styles.css">
 </head>
 <body>
 
 <p id="load-error" class="load-error" hidden></p>
+<div id="live-region" class="visually-hidden" aria-live="polite"></div>
 
 <div class="wrap">
 <header class="top">
@@ -45,7 +47,7 @@
           <button type="button" class="popover-close" id="share-close-btn" aria-label="Close">&times;</button>
           <div>
             <h3>Link to this view</h3>
-            <div class="row-label">A short link carrying the metric, country set, scenario, and theme.</div>
+            <div class="row-label">A short link carrying the metric, country set, and scenario.</div>
             <input type="text" id="share-link-input" readonly>
           </div>
           <div class="popover-actions">
@@ -67,20 +69,12 @@
             <button type="button" class="util-btn" id="share-card-deck-btn">Deck 16:9</button>
             <button type="button" class="util-btn" id="share-card-social-btn">Social 1200&times;630</button>
           </div>
-          <div>
-            <h3>Download the data</h3>
-            <div class="row-label">The cleaned, joined dataset behind this dashboard.</div>
-          </div>
-          <div class="popover-actions">
-            <button type="button" class="util-btn" id="share-download-csv-btn">CSV</button>
-            <button type="button" class="util-btn" id="share-download-json-btn">JSON</button>
-          </div>
         </div>
       </div>
-      <div class="theme-toggle" role="group" aria-label="Theme">
-        <button type="button" data-theme-btn="light">Light</button>
-        <button type="button" data-theme-btn="system" class="active">Auto</button>
-        <button type="button" data-theme-btn="dark">Dark</button>
+      <div class="theme-toggle" role="group" aria-label="Language">
+        <button type="button" data-lang-btn="en" class="active">EN</button>
+        <button type="button" data-lang-btn="es">ES</button>
+        <button type="button" data-lang-btn="fr">FR</button>
       </div>
     </div>
 
@@ -153,6 +147,7 @@
       <div class="card panel">
         <div class="card-head">
           <h2 id="panel-title">Global summary</h2>
+          <div id="panel-actions" class="panel-actions"></div>
         </div>
         <div class="card-body" id="panel-body"></div>
       </div>
@@ -176,6 +171,18 @@
         </div>
       </div>
       <div class="card-body compare-cols" id="compare-cols"></div>
+    </div>
+
+    <div class="card cell-subnational" id="subnational-card" hidden>
+      <div class="card-head">
+        <div>
+          <h2 id="subnational-title"></h2>
+          <div class="desc" id="subnational-desc"></div>
+        </div>
+        <button type="button" class="table-toggle" id="subnational-toggle"></button>
+      </div>
+      <div class="card-body" id="subnational-body"></div>
+      <details class="note-wrap"><summary>Methodology &amp; sources</summary><div class="scenario-note" id="subnational-note"></div></details>
     </div>
 
     <div class="card cell-trend" id="trend-card">
@@ -221,7 +228,7 @@
       <div class="legend-chips" id="sectors-legend"></div>
       <div class="card-body" id="sectors-body"></div>
       <div class="card-body" id="sectors-table" hidden></div>
-      <div class="scenario-note" id="sectors-note"></div>
+      <details class="note-wrap"><summary>Methodology &amp; sources</summary><div class="scenario-note" id="sectors-note"></div></details>
     </div>
 
     <div class="card cell-area" id="area-card">
@@ -255,8 +262,41 @@
           </table>
           </div>
         </div>
-        <div class="scenario-note" style="padding:12px 0 0;">Trend is the compound annual growth rate of territorial CO&#8322; over <span id="targets-trend-range">2014&ndash;2024</span>. Net-zero targets: <a href="https://eciu.net/netzerotracker" target="_blank" rel="noopener">Energy &amp; Climate Intelligence Unit Net Zero Tracker</a>; the United States is shown as having no active national target following its 2025 withdrawal from the Paris Agreement.</div>
+        <details class="note-wrap" style="padding-top:8px;"><summary>Methodology &amp; sources</summary><div class="scenario-note" style="padding:6px 0 0;">Trend is the compound annual growth rate of territorial CO&#8322; over <span id="targets-trend-range">2014&ndash;2024</span>. Net-zero targets: <a href="https://eciu.net/netzerotracker" target="_blank" rel="noopener">Energy &amp; Climate Intelligence Unit Net Zero Tracker</a>; the United States is shown as having no active national target following its 2025 withdrawal from the Paris Agreement.</div></details>
       </div>
+    </div>
+
+    <div class="card cell-portfolio" id="portfolio-card">
+      <div class="card-head">
+        <div>
+          <h2>Portfolio overlay</h2>
+          <div class="desc">Map a portfolio's country weights onto emissions, sector, and trajectory exposure &mdash; no separate spreadsheet. Holdings stay in this browser; nothing is uploaded.</div>
+        </div>
+        <button type="button" class="table-toggle" id="portfolio-edit-btn" hidden>Edit holdings</button>
+      </div>
+      <div class="card-body" id="portfolio-input">
+        <div class="pf-empty-grid">
+          <div>
+            <textarea id="portfolio-text" rows="7" spellcheck="false"
+              placeholder="One holding per line: country and weight.&#10;&#10;United States, 45&#10;JPN&#9;8&#10;Germany 4.5&#10;&#10;Weights can be % or amounts &mdash; they are normalized. Comments start with #."></textarea>
+            <div class="pf-input-actions" style="flex-direction:row;flex-wrap:wrap;margin-top:10px;">
+              <button type="button" class="util-btn primary" id="portfolio-apply-btn">Apply</button>
+              <label class="util-btn" for="portfolio-file">Load CSV&hellip;</label>
+              <input type="file" id="portfolio-file" accept=".csv,.tsv,.txt" hidden>
+              <button type="button" class="util-btn" id="portfolio-sample-btn">Load sample</button>
+              <button type="button" class="util-btn" id="portfolio-clear-btn">Clear</button>
+            </div>
+            <div class="pf-parse-note" id="portfolio-parse-note" role="status"></div>
+          </div>
+          <div class="pf-promo">
+            <div class="pp"><span class="ic">&#9878;</span><span class="pt">Weighted footprint of your country exposure, set against the world average.</span></div>
+            <div class="pp"><span class="ic">&#9632;</span><span class="pt">The sector mix behind it &mdash; energy, industry, agriculture, waste, land use.</span></div>
+            <div class="pp"><span class="ic">&#9737;</span><span class="pt">A weight-shaded world map and a country-by-country exposure list.</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="card-body" id="portfolio-results" hidden></div>
+      <div class="scenario-note" id="portfolio-note" hidden>Country-level attribution: each holding is mapped to its country's territorial emissions profile &mdash; a screening view, not issuer-level carbon accounting. Sector mix weights each country's share of gross CO&#8322;e emissions (Climate Watch); net land-use sinks are excluded from the mix. Trajectory is the 10-year CAGR of territorial CO&#8322;.</div>
     </div>
 
     <div class="card cell-scenario">
@@ -291,7 +331,7 @@
       <div class="scenario-results" id="scenario-results"></div>
       <div class="scenario-chart-legend" id="scenario-legend"></div>
       <div class="card-body" id="scenario-body"></div>
-      <div class="scenario-note">Simplified, illustrative model &mdash; not a forecast. Assumes the selected countries' emissions would otherwise hold flat at <span id="scenario-base-year">2024</span> levels, declining in a straight line to the target year and staying flat after. Avoided warming applies IPCC AR6&rsquo;s transient climate response to cumulative emissions (TCRE): a likely range of 0.27&ndash;0.63&deg;C per 1,000 Gt CO&#8322;, central estimate &asymp;0.45&deg;C. Real trajectories also depend on non-CO&#8322; gases, carbon-cycle feedbacks, and what every other country does.</div>
+      <details class="note-wrap"><summary>Methodology &amp; sources</summary><div class="scenario-note">Simplified, illustrative model &mdash; not a forecast. Assumes the selected countries' emissions would otherwise hold flat at <span id="scenario-base-year">2024</span> levels, declining in a straight line to the target year and staying flat after. Avoided warming applies IPCC AR6&rsquo;s transient climate response to cumulative emissions (TCRE): a likely range of 0.27&ndash;0.63&deg;C per 1,000 Gt CO&#8322;, central estimate &asymp;0.45&deg;C. The dashed 1.5&deg;C-aligned reference is the global IPCC benchmark &mdash; a straight-line decline to net-zero CO&#8322; by 2050 &mdash; applied uniformly to the selected group; equity-based national pathways differ. Real trajectories also depend on non-CO&#8322; gases, carbon-cycle feedbacks, and what every other country does.</div></details>
     </div>
 
     <div class="card cell-table">
@@ -329,11 +369,32 @@
   <footer>
     <p>Data: Global Carbon Project &amp; Our World in Data, <a href="https://github.com/owid/co2-data" target="_blank" rel="noopener">owid/co2-data</a> (CC BY 4.0), <span id="data-release">2024 release</span>. Country boundaries are simplified for display; a handful of small island states and territories aren&rsquo;t resolved on the map but remain in the table below. &ldquo;Share of warming&rdquo; is each country&rsquo;s share of the observed global temperature increase attributed to greenhouse gas emissions.</p>
     <p>Income groups follow the World Bank classification as compiled by Our World in Data. Built as an interactive reference, not a forecast &mdash; figures are territorial production emissions unless noted.</p>
+    <p class="footer-downloads"><span class="lbl">Download the data:</span>
+      <button type="button" class="linklike" id="share-download-csv-btn">CSV</button> &middot;
+      <button type="button" class="linklike" id="share-download-json-btn">JSON</button></p>
   </footer>
 </main>
 </div>
 
+<!-- direct child of body: the print stylesheet hides body > * except this -->
+<div class="story-overlay" id="onepager-overlay" hidden>
+  <div class="story-card onepager-frame" role="dialog" aria-modal="true" aria-label="Country one-pager preview">
+    <div class="story-eyebrow">Country one-pager</div>
+    <div class="onepager-scroll">
+      <div id="onepager"></div>
+    </div>
+    <div class="story-foot">
+      <div class="card-preview-hint">Your browser&rsquo;s print dialog opens &mdash; choose &ldquo;Save as PDF&rdquo;.</div>
+      <div class="story-nav">
+        <button type="button" class="util-btn primary" id="onepager-print-btn">Print / Save as PDF</button>
+        <button type="button" class="util-btn" id="onepager-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="src/js/i18n.js"></script>
 <script src="src/js/app.js"></script>
 </body>
 </html>

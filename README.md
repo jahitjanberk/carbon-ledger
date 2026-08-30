@@ -55,7 +55,7 @@ with no manual rebuild. It can also be triggered from the Actions tab.
 .
 ├── index.html          # document shell + page markup
 ├── src/
-│   ├── css/styles.css  # all styles, light/dark via CSS custom properties
+│   ├── css/styles.css  # all styles, via CSS custom properties (light-only)
 │   └── js/app.js       # data loading + all rendering (D3)
 ├── data/               # six JSON datasets, fetched at startup
 │   ├── geo.json        # country boundaries (GeoJSON FeatureCollection)
@@ -65,6 +65,7 @@ with no manual rebuild. It can also be triggered from the Actions tab.
 │   ├── income.json     # World Bank income-group aggregates
 │   ├── netzero.json    # net-zero target year + status, major emitters
 │   ├── sectors.json    # GHG emissions by sector (CO₂e), Climate Watch
+│   ├── subnational.json# state/province CO₂ where an official source exists
 │   └── meta.json       # refresh date + latest data years (footer credit)
 ├── scripts/
 │   └── refresh_data.py # regenerates /data from upstream, with validation
@@ -77,18 +78,68 @@ the map, the ranking and the table alike. Grid cells are named `.cell-map`,
 `.cell-area`, `.cell-targets`, `.cell-scenario` and `.cell-table` in
 `src/css/styles.css`.
 
+The portfolio overlay card takes a holdings list (pasted lines, a CSV file,
+or the built-in sample — `country, weight` in any unit, normalized) and maps
+it onto country-level exposure: weighted per-capita CO₂ vs. the world
+average, a historical-responsibility tilt, the share of weight in countries
+whose emissions are still rising, the sector mix of the underlying
+emissions, and a weight-shaded world map. Holdings persist only to
+`localStorage` — never uploaded, never in the URL. It is a screening view
+(country attribution, not issuer-level accounting), and its footnote says so.
+"Pin top 4 to compare" bridges into the comparison feature.
+
 "Saved views" stars the current combination — metric, pinned country set,
-selection, scenario settings, explicit theme — under a name in `localStorage`,
+selection, scenario settings — under a name in `localStorage`,
 restorable in one click. Each saved view (and the "Share & reuse" link) uses a
-compact code, e.g. `?v=w.CHN-USA..p50-2040` (metric+theme · pins · selected ·
+compact code, e.g. `?v=w.CHN-USA..p50-2040` (metric · pins · selected ·
 scenario), parsed alongside the legacy long-form params, so shared links stay
 short. The scenario controls are part of the URL state either way.
+
+Selecting a country that has official sub-national data reveals a
+state/province ranking card (share of the national total, 10-year change per
+region). Coverage is deliberately partial — only official, openly licensed,
+machine-readable sources qualify; today that is the United States (EIA state
+energy-related CO₂, public domain, parsed from xlsx with the stdlib in
+`scripts/refresh_data.py`). The `data/subnational.json` schema is keyed by
+ISO3, so adding a country is a new fetcher plus one dictionary entry, and a
+failed sub-national fetch never blocks the rest of a data refresh.
+
+Every country also has a one-pager — a print-formatted A4 climate profile
+(KPI grid, vector trend chart with the 1.5°C reference, auto-written summary
+sentences, sector bar, full source citations) opened from the detail panel or
+a compare-card column and exported through the browser's native print dialog
+as a PDF. It carries a link back to the
+interactive view, so it can drop straight into an ESG report.
 
 "Share & reuse" can also export the current view as a citation-ready PNG
 share card (deck 16:9 or social 1200×630). Cards are drawn directly on a
 canvas — no capture library — adapt to the view (global map, single country,
-or the pinned comparison), follow the active theme, and carry the source
-line, refresh date, and a link that reproduces the exact view.
+or the pinned comparison) and carry the source line, refresh date, and a
+link that reproduces the exact view.
+
+Treaty and policy milestones are marked directly on the time axes: global
+dates (Rio, Kyoto adoption and entry into force, Paris, the first NDC round)
+on the trend and global-source charts, and each tracked major emitter's own
+policy dates (NDCs, climate laws, withdrawals) on its one-pager chart — all
+curated by hand in `data/milestones.json`. Labels auto-place on two rows and
+drop (keeping the line and hover title) when years bunch too tightly.
+
+The interface is localized — English, Spanish, and French via the EN/ES/FR
+switcher in the header (persisted, and carried by share links as `&lang=`).
+Dictionaries live in `src/js/i18n.js`, keyed by the exact English strings
+with graceful fallback. Country names localize through `Intl.DisplayNames`
+(the pipeline adds ISO2 codes to `countries.json` for this), search matches
+both English and localized names, and numbers format per locale — including
+inside share cards and the one-pager PDF.
+
+Every trend visual carries a dashed 1.5°C-consistent reference path — a
+straight-line decline from the latest actual value to net-zero CO₂ at 2050,
+the IPCC SR1.5 global benchmark applied uniformly per series (a stated
+simplification; equity-based national pathways differ, and it is not a
+pledge). The main trend chart extends its axis to 2050 with tooltip support
+in the projected region, the scenario chart shows the aligned path beside
+the user's cut plus a "gap to 1.5°C" tile, and the panel/compare sparklines
+carry dashed tails.
 
 The sector card splits each country's emissions into energy, industrial
 processes, agriculture, waste, and land use & forestry — all gases as CO₂e

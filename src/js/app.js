@@ -15,6 +15,8 @@ var DATASETS = {
   income:    'data/income.json',
   netzero:   'data/netzero.json',
   sectors:   'data/sectors.json',
+  subnational: 'data/subnational.json',
+  milestones: 'data/milestones.json',
   meta:      'data/meta.json'
 };
 
@@ -66,15 +68,15 @@ function applyYearLabels(){
     var el = document.getElementById(id);
     if(el) el.textContent = text;
   };
-  set('as-of-label', 'Latest year: '+LATEST_YEAR);
-  set('map-title', 'Emissions by country, '+LATEST_YEAR);
-  set('area-title', 'Global emissions by source, 1900–'+LATEST_YEAR);
+  set('as-of-label', tf('Latest year: {y}',{y:LATEST_YEAR}));
+  set('map-title', tf('Emissions by country, {y}',{y:LATEST_YEAR}));
+  set('area-title', tf('Global emissions by source, 1900–{y}',{y:LATEST_YEAR}));
   set('targets-co2-th', 'CO₂, '+LATEST_YEAR);
   set('targets-trend-range', (LATEST_YEAR-10)+'–'+LATEST_YEAR);
   set('scenario-base-year', String(LATEST_YEAR));
-  set('table-title', 'All countries, '+LATEST_YEAR);
-  set('data-release', 'data through '+LATEST_YEAR
-    + (META.generated ? ', refreshed '+META.generated : ''));
+  set('table-title', tf('All countries, {y}',{y:LATEST_YEAR}));
+  set('data-release', tf('data through {y}',{y:LATEST_YEAR})
+    + (META.generated ? ', '+t('refreshed')+' '+META.generated : ''));
 }
 
 var TOP_TREND_ISOS = ['CHN','USA','IND','RUS','JPN','IDN'];
@@ -83,6 +85,43 @@ var CAT_HEX = ['--cat-1','--cat-2','--cat-3','--cat-4','--cat-5','--cat-6','--ca
 var INCOME_GROUPS = DATA.income;
 var NET_ZERO = DATA.netzero;
 var SECTORS = DATA.sectors;
+var SUBNATIONAL = DATA.subnational || {};
+var MILESTONES = DATA.milestones || {global:[], countries:{}};
+
+// Treaty / policy milestone markers on a time axis. Labels alternate between
+// two rows so close years (1992/1997, 2015/2020) don't collide; the full
+// label rides in a <title> for hover. Curated by hand in data/milestones.json.
+function drawMilestones(g, x, items, yTop, yBottom, opts){
+  var domain = x.domain();
+  var labelYears = opts && opts.labelYears;
+  var shown = items.filter(function(m){ return m.year>=domain[0] && m.year<=domain[1]; })
+    .sort(function(a,b){ return a.year-b.year; });
+  // Labels go to whichever of two rows has room; a label that would collide
+  // on both rows is dropped — its line and hover title still mark the year.
+  var rowEnds = [-Infinity, -Infinity];
+  shown.forEach(function(m){
+    var mx = x(m.year);
+    var nat = m.national ? ' national' : '';
+    g.append('line').attr('class','milestone-line'+nat).attr('x1',mx).attr('x2',mx)
+      .attr('y1',yTop+24).attr('y2',yBottom)
+      .append('title').text(m.year+' — '+t(m.label));
+    if(labelYears && labelYears.indexOf(m.year)<0) return;
+    var text = t(m.short);
+    var halfW = text.length*4.6/2 + 4;
+    var row = rowEnds[0] <= rowEnds[1] ? 0 : 1;
+    if(mx-halfW < rowEnds[row]){
+      row = 1-row;
+      if(mx-halfW < rowEnds[row]) return; // no room on either row
+    }
+    rowEnds[row] = mx+halfW;
+    var label = g.append('text')
+      .attr('class','milestone-label'+nat)
+      .attr('x',mx).attr('y', yTop + (row ? 20 : 9))
+      .attr('text-anchor','middle')
+      .text(text);
+    label.append('title').text(m.year+' — '+t(m.label));
+  });
+}
 var MAJOR_EMITTER_ISOS = Object.keys(NET_ZERO);
 var ARTIFACT_URL = 'https://claude.ai/code/artifact/757cf589-d1a9-4b05-bb64-d91bc5786c87';
 
@@ -99,6 +138,75 @@ var ARTIFACT_URL = 'https://claude.ai/code/artifact/757cf589-d1a9-4b05-bb64-d91b
   });
 })();
 
+/* ---------------- localization ---------------- */
+// Dictionaries live in src/js/i18n.js (window.CL_I18N), keyed by the exact
+// English string. t() falls back to English, so a missing entry can never
+// blank the UI; tf() fills {placeholders} after translation. Country names
+// localize through Intl.DisplayNames via each country's iso2 code.
+var I18N = (window.CL_I18N && window.CL_I18N.dict) || {};
+var LANG_DEFS = { en:{label:'EN', locale:'en-US'}, es:{label:'ES', locale:'es-ES'}, fr:{label:'FR', locale:'fr-FR'} };
+var lang = 'en';
+(function initLang(){
+  try{
+    var stored = localStorage.getItem('carbon-ledger-lang');
+    if(LANG_DEFS[stored]) lang = stored;
+  }catch(e){}
+})();
+function t(s){
+  var d = I18N[lang];
+  return (d && d[s]) || s;
+}
+function tf(s, params){
+  var out = t(s);
+  Object.keys(params).forEach(function(k){
+    out = out.split('{'+k+'}').join(params[k]);
+  });
+  return out;
+}
+var displayNamesCache = {};
+function cname(c){
+  if(!c) return '';
+  if(lang==='en' || !c.iso2) return c.country;
+  try{
+    if(!displayNamesCache[lang]) displayNamesCache[lang] = new Intl.DisplayNames([lang], {type:'region'});
+    return displayNamesCache[lang].of(c.iso2) || c.country;
+  }catch(e){ return c.country; }
+}
+function cnameIso(iso){ return byIso[iso] ? cname(byIso[iso]) : iso; }
+
+// static HTML: snapshot the English originals once, re-translate on switch
+var staticI18nNodes = [];
+function captureStaticI18n(selectors){
+  selectors.forEach(function(sel){
+    document.querySelectorAll(sel).forEach(function(el){
+      staticI18nNodes.push({ el: el, html: el.innerHTML });
+    });
+  });
+}
+function applyStaticI18n(){
+  // exposed for the translation tooling that keeps i18n.js keys exact
+  window.__i18nStaticKeys = staticI18nNodes.map(function(n){ return n.html; });
+  staticI18nNodes.forEach(function(n){ n.el.innerHTML = t(n.html); });
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-lang-btn]').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-lang-btn')===lang);
+  });
+  var search = document.getElementById('table-search');
+  if(search) search.placeholder = t('Search countries…');
+  var pfText = document.getElementById('portfolio-text');
+  if(pfText) pfText.placeholder = t('One holding per line: country and weight.')+'\n\n'
+    + 'United States, 45\nJPN\t8\nGermany 4.5\n\n'
+    + t('Weights can be % or amounts — they are normalized. Comments start with #.');
+}
+function setLang(l){
+  if(!LANG_DEFS[l]) return;
+  lang = l;
+  try{ localStorage.setItem('carbon-ledger-lang', l); }catch(e){}
+  applyStaticI18n();
+  applyYearLabels();
+  renderAll();
+}
+
 /* ---------------- formatting ---------------- */
 function fmtNum(v, d){
   if(v===null || v===undefined || isNaN(v)) return '—';
@@ -107,55 +215,40 @@ function fmtNum(v, d){
     var a = Math.abs(v);
     d = a>=100 ? 0 : a>=10 ? 1 : a>=1 ? 2 : 3;
   }
-  return v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+  return v.toLocaleString(LANG_DEFS[lang].locale,{minimumFractionDigits:d,maximumFractionDigits:d});
 }
 function fmtMt(v){
   if(v===null||v===undefined||isNaN(v)) return '—';
-  if(Math.abs(v)>=1000) return fmtNum(v/1000,2)+' Gt';
+  if(Math.abs(v)>=1000){
+    // ~3 significant figures for headline values: 1,849 Gt, 43.1 Gt, 12.3 Gt
+    var g = v/1000, a = Math.abs(g);
+    return fmtNum(g, a>=100?0:a>=10?1:2)+' Gt';
+  }
   return fmtNum(v)+' Mt';
 }
+// lowercase a label's first letter only when it starts a normal word --
+// leaves acronyms like "CO₂ total" (es) intact
+function lcLabel(s){
+  return /^[A-ZÀ-Ý][a-zà-ÿ]/.test(s) ? s.charAt(0).toLowerCase()+s.slice(1) : s;
+}
 function fmtPct(v){ if(v===null||v===undefined||isNaN(v)) return '—'; return fmtNum(v,2)+'%'; }
+
+// screen-reader announcements for state changes that have no textual focus target
+function announce(msg){
+  var el = document.getElementById('live-region');
+  if(el) el.textContent = msg;
+}
 function fmtC(v){ if(v===null||v===undefined||isNaN(v)) return '—'; return (v>=0?'+':'')+fmtNum(v,2)+'°C'; }
 
 /* ---------------- theme ---------------- */
+// Single-theme build: the dashboard renders light only. effectiveTheme() and
+// applyThemeAttr() survive as shims so chart color helpers and old share
+// links (whose view codes may still carry a theme suffix) keep working.
 var root = document.documentElement;
-function getStoredTheme(){ try{ return localStorage.getItem('carbon-ledger-theme')
-    || localStorage.getItem('carbon-atlas-theme'); /* pre-rename key */ }catch(e){ return null; } }
-function setStoredTheme(v){ try{ localStorage.setItem('carbon-ledger-theme', v); }catch(e){} }
-function applyThemeButtons(mode){
-  document.querySelectorAll('[data-theme-btn]').forEach(function(b){
-    b.classList.toggle('active', b.getAttribute('data-theme-btn')===mode);
-  });
-}
-function applyThemeAttr(mode){
-  if(mode==='light'||mode==='dark'){ root.setAttribute('data-theme', mode); }
-  else { root.removeAttribute('data-theme'); }
-  applyThemeButtons(mode);
-  setStoredTheme(mode);
-}
-function setTheme(mode){
-  applyThemeAttr(mode);
-  renderAll();
-}
-function effectiveTheme(){
-  var attr = root.getAttribute('data-theme');
-  if(attr==='light'||attr==='dark') return attr;
-  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark':'light';
-}
-(function initTheme(){
-  // Only set the attribute/button state here — renderAll() runs once, at the
-  // bottom of this file, after every render function and data structure below
-  // is defined. Calling it from this early IIFE would run against undefined values.
-  var stored = getStoredTheme() || 'system';
-  applyThemeAttr(stored);
-  if(window.matchMedia){
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(){
-      if(!root.getAttribute('data-theme')) renderAll();
-    });
-  }
-})();
-document.querySelectorAll('[data-theme-btn]').forEach(function(b){
-  b.addEventListener('click', function(){ setTheme(b.getAttribute('data-theme-btn')); });
+function effectiveTheme(){ return 'light'; }
+function applyThemeAttr(){}
+document.querySelectorAll('[data-lang-btn]').forEach(function(b){
+  b.addEventListener('click', function(){ setLang(b.getAttribute('data-lang-btn')); });
 });
 
 /* ---------------- metrics ---------------- */
@@ -178,46 +271,46 @@ function renderKPIs(){
 
   var tiles = [
     {
-      label: 'Global CO₂ emissions, '+LATEST_YEAR, value: fmtMt(worldLatest.co2),
+      label: tf('Global CO₂ emissions, {y}',{y:LATEST_YEAR}), value: fmtMt(worldLatest.co2),
       delta: (yoy>=0?'+':'')+fmtNum(yoy,1)+'%', deltaBad: yoy>0,
-      sub: 'vs. ' + fmtMt(worldPrev.co2) + ' in ' + PREV_YEAR
+      sub: tf('vs. {v} in {y}',{v:fmtMt(worldPrev.co2), y:PREV_YEAR})
     },
     {
-      label: 'Average per person', value: fmtNum(worldLatest.co2_per_capita,2), unit:'t / yr',
-      sub: 'world population ' + fmtNum(worldLatest.population/1e9,2) + 'B'
+      label: t('Average per person'), value: fmtNum(worldLatest.co2_per_capita,2), unit:t('t / yr'),
+      sub: tf('world population {n}B',{n:fmtNum(worldLatest.population/1e9,2)})
     },
     {
-      label: 'Cumulative since 1750', value: fmtMt(worldLatest.cumulative_co2),
-      sub: 'total industrial-era CO₂'
+      label: t('Cumulative since 1750'), value: fmtMt(worldLatest.cumulative_co2),
+      sub: t('total industrial-era CO₂')
     },
     {
-      label: 'Warming from CO₂ so far', value: fmtC(worldLatest.temperature_change_from_co2),
-      sub: fmtC(worldLatest.temperature_change_from_ghg) + ' from all greenhouse gases'
+      label: t('Warming from CO₂ so far'), value: fmtC(worldLatest.temperature_change_from_co2),
+      sub: tf('{v} from all greenhouse gases',{v:fmtC(worldLatest.temperature_change_from_ghg)})
     },
     {
-      label: 'Largest emitter, '+LATEST_YEAR, value: top.country,
-      sub: fmtMt(top.co2) + ' · ' + fmtPct(top.share_global_co2) + ' of the world total'
+      label: tf('Largest emitter, {y}',{y:LATEST_YEAR}), value: cname(top),
+      sub: fmtMt(top.co2) + ' · ' + tf('{p} of the world total',{p:fmtPct(top.share_global_co2)})
     }
   ];
 
   el.innerHTML = '';
-  tiles.forEach(function(t){
+  tiles.forEach(function(tile){
     var d = document.createElement('div');
     d.className = 'kpi';
     var deltaHtml = '';
-    if(t.delta){
-      deltaHtml = '<div class="delta '+(t.deltaBad?'up-bad':'up-good')+'">'+t.delta+' <span class="ctx">year over year</span></div>';
+    if(tile.delta){
+      deltaHtml = '<div class="delta '+(tile.deltaBad?'up-bad':'up-good')+'">'+tile.delta+' <span class="ctx">'+t('year over year')+'</span></div>';
     }
     d.innerHTML =
       '<div class="label"></div>'+
       '<div class="value num"></div>'+
       deltaHtml+
       '<div class="sub"></div>';
-    d.querySelector('.label').textContent = t.label;
+    d.querySelector('.label').textContent = tile.label;
     var valEl = d.querySelector('.value');
-    valEl.textContent = t.value;
-    if(t.unit){ var u=document.createElement('span'); u.className='unit'; u.textContent=t.unit; valEl.appendChild(u); }
-    d.querySelector('.sub').textContent = t.sub;
+    valEl.textContent = tile.value;
+    if(tile.unit){ var u=document.createElement('span'); u.className='unit'; u.textContent=tile.unit; valEl.appendChild(u); }
+    d.querySelector('.sub').textContent = tile.sub;
     el.appendChild(d);
   });
 }
@@ -229,7 +322,7 @@ function renderMetricPicker(){
   METRICS.forEach(function(m){
     var b = document.createElement('button');
     b.type='button'; b.className='metric-btn'+(state.metric===m.key?' active':'');
-    b.textContent = m.label;
+    b.textContent = t(m.label);
     b.addEventListener('click', function(){
       state.metric = m.key;
       renderMetricPicker();
@@ -345,18 +438,28 @@ function onCountryHover(ev, d){
   var tip = document.getElementById('map-tooltip');
   if(!c){ hideMapTooltip(); return; }
   var m = currentMetric();
-  var name = document.createElement('div'); name.className='t-name'; name.textContent = c.country;
+  var name = document.createElement('div'); name.className='t-name'; name.textContent = cname(c);
   tip.innerHTML = '';
   tip.appendChild(name);
   var val = document.createElement('div'); val.className='t-val';
-  if(c[m.key]==null){ val.textContent = 'No data'; }
+  if(c[m.key]==null){ val.textContent = t('No data'); }
   else {
-    val.textContent = m.mapLabel + ': ' + m.fmt(c[m.key]);
+    val.textContent = t(m.mapLabel) + ': ' + m.fmt(c[m.key]);
     var ranked = COUNTRIES.filter(function(x){return x[m.key]!=null;}).sort(function(a,b){return b[m.key]-a[m.key];});
     var rank = ranked.indexOf(c)+1;
     var rk = document.createElement('div'); rk.className='t-rank';
-    rk.textContent = 'Rank '+rank+' of '+ranked.length;
+    rk.textContent = tf('Rank {r} of {n}',{r:rank, n:ranked.length});
     tip.appendChild(val); tip.appendChild(rk);
+    if(SUBNATIONAL[c.iso_code]){
+      var sn = document.createElement('div'); sn.className='t-rank';
+      sn.textContent = t('Click for state-level detail');
+      tip.appendChild(sn);
+    }
+    if(pinIndex(c.iso_code)<0){
+      var ph = document.createElement('div'); ph.className='t-rank';
+      ph.textContent = t('Shift-click to pin for comparison');
+      tip.appendChild(ph);
+    }
   }
   if(c[m.key]==null) tip.appendChild(val);
   tip.style.left = ev.clientX+'px';
@@ -376,10 +479,10 @@ function renderLegend(){
     var neutral = theme==='dark' ? '#383835' : '#f0efec';
     var bluePole = theme==='dark' ? '#3987e5' : '#2a78d6';
     var redPole = theme==='dark' ? '#e66767' : '#d03b3b';
-    var lo = document.createElement('span'); lo.className='lo'; lo.textContent='Under';
+    var lo = document.createElement('span'); lo.className='lo'; lo.textContent=t('Under');
     var grad = document.createElement('div'); grad.className='legend-grad';
     grad.style.background = 'linear-gradient(90deg,'+bluePole+','+neutral+' 50%,'+redPole+')';
-    var hi = document.createElement('span'); hi.className='hi'; hi.textContent='Over ('+DIVERGING_CAP+'×+)';
+    var hi = document.createElement('span'); hi.className='hi'; hi.textContent=tf('Over ({n}×+)',{n:DIVERGING_CAP});
     wrap.appendChild(lo); wrap.appendChild(grad); wrap.appendChild(hi);
   } else {
     var dom = metricDomain(m.key);
@@ -392,11 +495,11 @@ function renderLegend(){
   }
   el.appendChild(wrap);
   var unit = document.createElement('span'); unit.className='legend-note'; unit.style.marginLeft='4px';
-  unit.textContent = m.legendUnit;
+  unit.textContent = t(m.legendUnit);
   el.appendChild(unit);
   var note = document.createElement('span'); note.className='legend-note';
   note.innerHTML = '<span class="no-data-swatch"></span> ';
-  note.appendChild(document.createTextNode(' no data'));
+  note.appendChild(document.createTextNode(' '+t('no data')));
   el.appendChild(note);
 }
 
@@ -407,20 +510,25 @@ function rankOf(iso, key){
   return idx<0 ? null : {rank: idx+1, total: ranked.length};
 }
 function selectCountry(iso){
+  if(state.selectedIso !== iso) subnationalExpanded = false;
   state.selectedIso = iso;
   renderMap();
   renderPanel();
   renderBarChart();
   renderSectors();
+  renderSubnational();
   highlightTableRow(iso);
   syncUrl();
+  if(byIso[iso]) announce(t('Selected ')+cnameIso(iso));
 }
 function resetCountry(){
   state.selectedIso = null;
+  subnationalExpanded = false;
   renderMap();
   renderPanel();
   renderBarChart();
   renderSectors();
+  renderSubnational();
   highlightTableRow(null);
   syncUrl();
 }
@@ -428,69 +536,90 @@ function resetCountry(){
 function renderPanel(){
   var title = document.getElementById('panel-title');
   var body = document.getElementById('panel-body');
+  var actions = document.getElementById('panel-actions');
+  actions.innerHTML = '';
   body.innerHTML = '';
   if(!state.selectedIso){
-    title.textContent = 'Global summary';
+    title.textContent = t('Global summary');
     var p = document.createElement('div'); p.className='panel-empty';
-    p.textContent = 'Click any country on the map, in the ranking, or in the table to see its detail here.';
+    p.textContent = t('Click any country on the map, in the ranking, or in the table to see its detail here.');
     body.appendChild(p);
 
     var statGrid = document.createElement('div'); statGrid.className='panel-stats';
-    statGrid.appendChild(statBlock(LATEST_YEAR+' total', fmtMt(worldLatest.co2)));
-    statGrid.appendChild(statBlock('Per person', fmtNum(worldLatest.co2_per_capita,2)+' t'));
+    statGrid.appendChild(statBlock(tf('{y} total',{y:LATEST_YEAR}), fmtMt(worldLatest.co2)));
+    statGrid.appendChild(statBlock(t('Per person'), fmtNum(worldLatest.co2_per_capita,2)+' t'));
     body.appendChild(statGrid);
 
-    var sl = document.createElement('div'); sl.className='panel-spark-label'; sl.textContent='World CO₂, 1900–'+LATEST_YEAR+' (Mt/yr)';
+    var sl = document.createElement('div'); sl.className='panel-spark-label';
+    sl.textContent=tf('World CO₂, 1900–{y} (Mt/yr)',{y:LATEST_YEAR})+(SHOW_ALIGNED?' · '+t('dashed: 1.5°C path'):'');
     body.appendChild(sl);
-    var svgSpark = drawMiniLine(WORLD.map(function(r){return {x:r.year,y:r.co2};}), 'var(--cat-1)');
+    var svgSpark = drawMiniLine(WORLD.map(function(r){return {x:r.year,y:r.co2};}), 'var(--cat-1)', {aligned:true});
     body.appendChild(svgSpark);
     return;
   }
   var c = byIso[state.selectedIso];
-  title.textContent = c.country;
+  title.textContent = cname(c);
 
-  var btnRow = document.createElement('div');
-  btnRow.style.display='flex'; btnRow.style.gap='8px'; btnRow.style.flexWrap='wrap';
-  var resetBtn = document.createElement('button');
-  resetBtn.className='panel-reset'; resetBtn.type='button'; resetBtn.textContent='← Back to global summary';
-  resetBtn.addEventListener('click', resetCountry);
-  btnRow.appendChild(resetBtn);
-  var pinBtn = document.createElement('button');
-  pinBtn.className='panel-reset'; pinBtn.type='button';
+  // compact icon actions in the card head; the numbers lead in the body
   var pinned = pinIndex(c.iso_code)>=0;
-  pinBtn.textContent = pinned ? '★ Unpin from comparison' : '☆ Pin to compare';
+  var pinBtn = document.createElement('button');
+  pinBtn.className='icon-btn'; pinBtn.type='button';
+  pinBtn.textContent = pinned ? '★' : '☆';
   if(pinned) pinBtn.style.color = pinColor(c.iso_code);
+  pinBtn.title = pinned ? t('★ Unpin from comparison') : t('☆ Pin to compare');
+  pinBtn.setAttribute('aria-label', pinBtn.title);
   pinBtn.setAttribute('aria-pressed', String(pinned));
   pinBtn.addEventListener('click', function(){ togglePin(c.iso_code); });
-  btnRow.appendChild(pinBtn);
-  body.appendChild(btnRow);
+  actions.appendChild(pinBtn);
+  var opBtn = document.createElement('button');
+  opBtn.className='icon-btn'; opBtn.type='button'; opBtn.textContent='⎙';
+  opBtn.title = t('⎙ One-pager (PDF)');
+  opBtn.setAttribute('aria-label', opBtn.title);
+  opBtn.addEventListener('click', function(){ openOnePager(c.iso_code); });
+  actions.appendChild(opBtn);
+
+  var resetBtn = document.createElement('button');
+  resetBtn.className='panel-back'; resetBtn.type='button'; resetBtn.textContent=t('← Back to global summary');
+  resetBtn.addEventListener('click', resetCountry);
+  body.appendChild(resetBtn);
 
   var iso = document.createElement('div'); iso.className='panel-iso'; iso.textContent = c.iso_code;
   body.appendChild(iso);
 
   var grid = document.createElement('div'); grid.className='panel-stats';
   grid.appendChild(statBlock('CO₂, '+LATEST_YEAR, fmtMt(c.co2)));
-  grid.appendChild(statBlock('Per person', c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2)+' t':'—'));
-  grid.appendChild(statBlock('Cumulative since 1750', fmtMt(c.cumulative_co2)));
-  grid.appendChild(statBlock('Share of global CO₂', fmtPct(c.share_global_co2)));
-  grid.appendChild(statBlock('Share of warming', fmtPct(c.share_of_temperature_change_from_ghg)));
-  grid.appendChild(statBlock('Warming from its CO₂', fmtC(c.temperature_change_from_co2)));
+  grid.appendChild(statBlock(t('Per person'), c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2)+' t':'—'));
+  grid.appendChild(statBlock(t('Cumulative since 1750'), fmtMt(c.cumulative_co2)));
+  grid.appendChild(statBlock(t('Share of global CO₂'), fmtPct(c.share_global_co2)));
+  grid.appendChild(statBlock(t('Share of warming'), fmtPct(c.share_of_temperature_change_from_ghg)));
+  grid.appendChild(statBlock(t('Warming from its CO₂'), fmtC(c.temperature_change_from_co2)));
   body.appendChild(grid);
 
   var rk = rankOf(c.iso_code, state.metric);
   if(rk){
     var m = currentMetric();
     var rankEl = document.createElement('div'); rankEl.className='panel-rank';
-    rankEl.innerHTML = 'Ranked <b>#'+rk.rank+'</b> of '+rk.total+' countries by '+m.label.toLowerCase();
+    rankEl.innerHTML = tf('Ranked <b>#{r}</b> of {n} countries by {m}',{r:rk.rank, n:rk.total, m:lcLabel(t(m.label))});
     body.appendChild(rankEl);
+  }
+
+  if(SUBNATIONAL[c.iso_code]){
+    var snBtn = document.createElement('button');
+    snBtn.className='panel-reset'; snBtn.type='button';
+    snBtn.textContent = t('▸ State-level detail');
+    snBtn.addEventListener('click', function(){
+      document.getElementById('subnational-card').scrollIntoView({behavior:'smooth', block:'start'});
+    });
+    body.appendChild(snBtn);
   }
 
   var h = HISTORY[c.iso_code];
   if(h && h.co2 && h.co2.some(function(v){return v!=null;})){
-    var sl2 = document.createElement('div'); sl2.className='panel-spark-label'; sl2.textContent=c.country+' CO₂, 1950–'+LATEST_YEAR+' (Mt/yr)';
+    var sl2 = document.createElement('div'); sl2.className='panel-spark-label';
+    sl2.textContent=cname(c)+' — '+tf('CO₂, 1950–{y} (Mt/yr)',{y:LATEST_YEAR})+(SHOW_ALIGNED?' · '+t('dashed: 1.5°C path'):'');
     body.appendChild(sl2);
     var pts = h.years.map(function(y,i){return {x:y,y:h.co2[i]};}).filter(function(p){return p.y!=null;});
-    body.appendChild(drawMiniLine(pts, 'var(--cat-2)'));
+    body.appendChild(drawMiniLine(pts, 'var(--cat-2)', {aligned:true}));
   }
 }
 function statBlock(label, val){
@@ -500,13 +629,16 @@ function statBlock(label, val){
   d.appendChild(l); d.appendChild(v);
   return d;
 }
-function drawMiniLine(points, colorVar){
+function drawMiniLine(points, colorVar, opts){
   var w=270, h=64, pad=4;
   var svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg');
   svgEl.setAttribute('viewBox','0 0 '+w+' '+h);
   svgEl.setAttribute('width','100%'); svgEl.setAttribute('height',h);
   if(!points.length) return svgEl;
-  var x = d3.scaleLinear().domain(d3.extent(points, function(p){return p.x;})).range([pad, w-pad]);
+  var last = points[points.length-1];
+  var withAligned = opts && opts.aligned && SHOW_ALIGNED;
+  var xmax = withAligned ? ALIGNED_ZERO_YEAR : last.x;
+  var x = d3.scaleLinear().domain([points[0].x, xmax]).range([pad, w-pad]);
   var y = d3.scaleLinear().domain([0, d3.max(points, function(p){return p.y;})*1.08]).range([h-pad, pad]);
   var line = d3.line().x(function(p){return x(p.x);}).y(function(p){return y(p.y);}).curve(d3.curveMonotoneX);
   var path = document.createElementNS('http://www.w3.org/2000/svg','path');
@@ -517,7 +649,16 @@ function drawMiniLine(points, colorVar){
   path.setAttribute('stroke-linecap','round');
   path.setAttribute('stroke-linejoin','round');
   svgEl.appendChild(path);
-  var last = points[points.length-1];
+  if(withAligned){
+    var ap = document.createElementNS('http://www.w3.org/2000/svg','path');
+    ap.setAttribute('d', line([{x:last.x, y:last.y}, {x:ALIGNED_ZERO_YEAR, y:0}]));
+    ap.setAttribute('fill','none');
+    ap.setAttribute('stroke', colorVar);
+    ap.setAttribute('stroke-width','1.5');
+    ap.setAttribute('stroke-dasharray','3,3');
+    ap.setAttribute('opacity','0.55');
+    svgEl.appendChild(ap);
+  }
   var dot = document.createElementNS('http://www.w3.org/2000/svg','circle');
   dot.setAttribute('cx', x(last.x)); dot.setAttribute('cy', y(last.y)); dot.setAttribute('r','3.5');
   dot.setAttribute('fill', colorVar); dot.setAttribute('class','trend-dot');
@@ -529,8 +670,8 @@ function drawMiniLine(points, colorVar){
 function renderBarChart(){
   var body = document.getElementById('bar-body');
   var m = currentMetric();
-  document.getElementById('bar-title').textContent = 'Top 15 by ' + m.label.toLowerCase();
-  document.getElementById('bar-desc').textContent = m.mapLabel + ', ' + LATEST_YEAR + ' (' + m.legendUnit + ')';
+  document.getElementById('bar-title').textContent = tf('Top 15 by {m}',{m:lcLabel(t(m.label))});
+  document.getElementById('bar-desc').textContent = t(m.mapLabel) + ' (' + t(m.legendUnit) + ')';
   var ranked = COUNTRIES.filter(function(c){return c[m.key]!=null;}).sort(function(a,b){return b[m.key]-a[m.key];}).slice(0,15);
   var max = ranked[0][m.key];
   body.innerHTML = '';
@@ -541,7 +682,7 @@ function renderBarChart(){
     row.setAttribute('data-iso', c.iso_code);
     row.addEventListener('click', function(){ selectCountry(c.iso_code); });
     var rank=document.createElement('div'); rank.className='b-rank'; rank.textContent=(i+1);
-    var name=document.createElement('div'); name.className='b-name'; name.textContent=c.country; name.title=c.country;
+    var name=document.createElement('div'); name.className='b-name'; name.textContent=cname(c); name.title=cname(c);
     var track=document.createElement('div'); track.className='b-track';
     var fill=document.createElement('div'); fill.className='b-fill'; fill.style.width=(c[m.key]/max*100)+'%';
     if(pi>=0) fill.style.background='var('+CAT_HEX[pi]+')';
@@ -561,6 +702,63 @@ function highlightTableRow(iso){
   });
 }
 
+/* ================= sub-national detail ================= */
+// State/province ranking for the selected country, where an official openly
+// licensed dataset exists (see scripts/refresh_data.py). Coverage is partial
+// by design -- the card only appears when the selected country has data.
+var SUBNAT_COLLAPSED_COUNT = 15;
+var subnationalExpanded = false;
+
+function renderSubnational(){
+  var card = document.getElementById('subnational-card');
+  var sn = state.selectedIso ? SUBNATIONAL[state.selectedIso] : null;
+  if(!sn){ card.hidden = true; return; }
+  card.hidden = false;
+  var c = byIso[state.selectedIso];
+  document.getElementById('subnational-title').textContent =
+    tf('{c}, state by state — {y}',{c:cname(c), y:sn.year});
+  document.getElementById('subnational-desc').textContent =
+    t(sn.scope.replace(/CO2/g,'CO₂'))+' '+tf('Bars are each state’s share of the state total; the pill is the 10-year change ({y0}–{y1}).',{y0:sn.trend_from, y1:sn.year});
+  document.getElementById('subnational-note').textContent =
+    tf('Source: {s} ({u}). The {n} states sum to {tot} in {y} on this scope; the national figure elsewhere on this page ({nat}) is all CO₂ in {ly}, so the two are not directly comparable.',
+      { s:sn.source, u:sn.source_url, n:sn.regions.length, tot:fmtMt(sn.national_total),
+        y:sn.year, nat:fmtMt(c.co2), ly:LATEST_YEAR });
+
+  var toggle = document.getElementById('subnational-toggle');
+  var showing = subnationalExpanded ? sn.regions : sn.regions.slice(0, SUBNAT_COLLAPSED_COUNT);
+  toggle.textContent = subnationalExpanded
+    ? tf('Show top {n}',{n:SUBNAT_COLLAPSED_COUNT})
+    : tf('Show all {n}',{n:sn.regions.length});
+  toggle.onclick = function(){ subnationalExpanded = !subnationalExpanded; renderSubnational(); };
+
+  var body = document.getElementById('subnational-body');
+  body.innerHTML = '';
+  var max = sn.regions[0].co2;
+  showing.forEach(function(r, i){
+    var row = document.createElement('div'); row.className='bar-row subnat-row';
+    row.style.cursor='default';
+    var rank=document.createElement('div'); rank.className='b-rank'; rank.textContent=(i+1);
+    var name=document.createElement('div'); name.className='b-name'; name.textContent=r.name; name.title=r.name;
+    var track=document.createElement('div'); track.className='b-track';
+    var fill=document.createElement('div'); fill.className='b-fill'; fill.style.width=(r.co2/max*100)+'%';
+    track.appendChild(fill);
+    var val=document.createElement('div'); val.className='b-val'; val.textContent=fmtMt(r.co2);
+    var share=document.createElement('div'); share.className='sub-share';
+    share.textContent = fmtNum(r.co2/sn.national_total*100,1)+'%';
+    share.title = t('Share of the state total');
+    var pill=document.createElement('span');
+    if(r.co2_10y_ago>0){
+      var chg = (r.co2/r.co2_10y_ago-1)*100;
+      pill.className = 'status-pill '+(chg<0?'falling':'rising');
+      pill.textContent = (chg<0?'↓':'↑')+fmtNum(Math.abs(chg),0)+'%';
+      pill.title = tf('Change vs {y}',{y:sn.trend_from});
+    } else { pill.className='pf-trend'; pill.textContent='—'; }
+    row.appendChild(rank); row.appendChild(name); row.appendChild(track);
+    row.appendChild(val); row.appendChild(share); row.appendChild(pill);
+    body.appendChild(row);
+  });
+}
+
 /* ================= compare: pinned countries ================= */
 // Up to MAX_PINS countries can be pinned at once. Each pin keeps a stable
 // color slot (--cat-1..4) for as long as it stays pinned, and every view --
@@ -572,6 +770,7 @@ function pinIndex(iso){ return state.pinned.indexOf(iso); }
 function pinColor(iso){ var i = pinIndex(iso); return i<0 ? null : 'var('+CAT_HEX[i]+')'; }
 function togglePin(iso){
   var i = pinIndex(iso);
+  var added = i<0;
   if(i>=0){ state.pinned.splice(i,1); }
   else {
     var c = byIso[iso];
@@ -581,6 +780,8 @@ function togglePin(iso){
   }
   if(scenarioState.group==='pinned' && !state.pinned.length) scenarioState.group='top6';
   renderPinned();
+  announce(cnameIso(iso) + (added ? t(' pinned to comparison, ') : t(' unpinned, '))
+    + state.pinned.length + ' / ' + MAX_PINS);
 }
 function renderPinned(){
   renderCompareTray();
@@ -594,18 +795,19 @@ function renderPinned(){
   renderTargetsTable();
   renderScenarioControls();
   renderScenario();
+  updatePortfolioPinDots();
   syncUrl();
 }
 function setTrayHint(){
   var hint = document.getElementById('compare-hint');
   if(hint.classList.contains('limit')) return;
   hint.textContent = state.pinned.length===0
-    ? 'Pin 2–4 countries and every chart follows them.'
-    : state.pinned.length===1 ? 'Pin another to compare side by side.' : '';
+    ? t('Pin 2–4 countries and every chart follows them.')
+    : state.pinned.length===1 ? t('Pin another to compare side by side.') : '';
 }
 function flashPinLimit(){
   var hint = document.getElementById('compare-hint');
-  hint.textContent = 'Up to '+MAX_PINS+' countries — unpin one first.';
+  hint.textContent = tf('Up to {n} countries — unpin one first.',{n:MAX_PINS});
   hint.classList.add('limit');
   clearTimeout(pinHintTimer);
   pinHintTimer = setTimeout(function(){ hint.classList.remove('limit'); setTrayHint(); }, 2200);
@@ -617,9 +819,9 @@ function pinToggleButton(iso){
   b.className = 'row-pin'+(pinned?' on':'');
   b.textContent = pinned ? '★' : '☆';
   if(pinned) b.style.color = pinColor(iso);
-  b.title = pinned ? 'Remove from comparison' : 'Pin to compare';
+  b.title = pinned ? t('Remove from comparison') : t('Pin to compare');
   b.setAttribute('aria-pressed', String(pinned));
-  b.setAttribute('aria-label', (pinned?'Unpin ':'Pin ')+(byIso[iso]?byIso[iso].country:iso));
+  b.setAttribute('aria-label', (pinned?t('Unpin '):t('Pin '))+cnameIso(iso));
   b.addEventListener('click', function(e){ e.stopPropagation(); togglePin(iso); });
   return b;
 }
@@ -628,13 +830,12 @@ function renderCompareTray(){
   var chips = document.getElementById('compare-chips');
   chips.innerHTML = '';
   state.pinned.forEach(function(iso, i){
-    var c = byIso[iso];
     var chip = document.createElement('span'); chip.className='tray-chip';
     var dot = document.createElement('span'); dot.className='dot'; dot.style.background='var('+CAT_HEX[i]+')';
     chip.appendChild(dot);
-    chip.appendChild(document.createTextNode(c?c.country:iso));
+    chip.appendChild(document.createTextNode(cnameIso(iso)));
     var x = document.createElement('button'); x.type='button'; x.className='chip-x'; x.textContent='×';
-    x.setAttribute('aria-label','Unpin '+(c?c.country:iso));
+    x.setAttribute('aria-label',t('Unpin ')+cnameIso(iso));
     x.addEventListener('click', function(){ togglePin(iso); });
     chip.appendChild(x);
     chips.appendChild(chip);
@@ -642,28 +843,35 @@ function renderCompareTray(){
   var input = document.getElementById('compare-search');
   var full = state.pinned.length>=MAX_PINS;
   input.disabled = full;
-  input.placeholder = full ? 'Limit of '+MAX_PINS+' — unpin one' : 'Add a country…';
+  input.placeholder = full ? tf('Limit of {n} — unpin one',{n:MAX_PINS}) : t('Add a country…');
   document.getElementById('compare-clear').hidden = state.pinned.length===0;
   setTrayHint();
 }
 
 var compareSearchEl = document.getElementById('compare-search');
 var compareSuggestEl = document.getElementById('compare-suggest');
+var suggestIndex = 0;
 function hideSuggest(){ compareSuggestEl.hidden = true; compareSuggestEl.innerHTML=''; }
+function applySuggestActive(){
+  Array.prototype.forEach.call(compareSuggestEl.querySelectorAll('button'), function(b, i){
+    b.classList.toggle('active', i===suggestIndex);
+  });
+}
 function updateSuggest(){
   var q = (compareSearchEl.value||'').toLowerCase().trim();
   if(!q){ hideSuggest(); return; }
   var matches = COUNTRIES.filter(function(c){
-    return c.co2!=null && pinIndex(c.iso_code)<0 && c.country.toLowerCase().indexOf(q)>-1;
+    return c.co2!=null && pinIndex(c.iso_code)<0
+      && (c.country.toLowerCase().indexOf(q)>-1 || cname(c).toLowerCase().indexOf(q)>-1);
   }).sort(function(a,b){ return b.co2-a.co2; }).slice(0,8);
   compareSuggestEl.innerHTML='';
   if(!matches.length){
-    var none = document.createElement('div'); none.className='suggest-none'; none.textContent='No matching country';
+    var none = document.createElement('div'); none.className='suggest-none'; none.textContent=t('No matching country');
     compareSuggestEl.appendChild(none);
   }
   matches.forEach(function(c){
     var b = document.createElement('button'); b.type='button';
-    var name = document.createElement('span'); name.textContent = c.country;
+    var name = document.createElement('span'); name.textContent = cname(c);
     var val = document.createElement('span'); val.className='sv'; val.textContent = fmtMt(c.co2);
     b.appendChild(name); b.appendChild(val);
     b.addEventListener('click', function(){
@@ -672,12 +880,22 @@ function updateSuggest(){
     compareSuggestEl.appendChild(b);
   });
   compareSuggestEl.hidden = false;
+  suggestIndex = 0;
+  applySuggestActive();
 }
 compareSearchEl.addEventListener('input', updateSuggest);
 compareSearchEl.addEventListener('keydown', function(e){
-  if(e.key==='Enter'){
-    var first = compareSuggestEl.querySelector('button');
-    if(first) first.click();
+  var btns = compareSuggestEl.querySelectorAll('button');
+  if(e.key==='ArrowDown' && btns.length){
+    suggestIndex = (suggestIndex+1) % btns.length;
+    applySuggestActive();
+    e.preventDefault();
+  } else if(e.key==='ArrowUp' && btns.length){
+    suggestIndex = (suggestIndex-1+btns.length) % btns.length;
+    applySuggestActive();
+    e.preventDefault();
+  } else if(e.key==='Enter'){
+    if(btns.length) btns[Math.min(suggestIndex, btns.length-1)].click();
     e.preventDefault();
   } else if(e.key==='Escape'){ hideSuggest(); }
 });
@@ -716,8 +934,8 @@ function renderCompareCard(){
   if(!state.pinned.length){ card.hidden = true; cols.innerHTML=''; return; }
   card.hidden = false;
   document.getElementById('compare-desc').textContent = state.pinned.length===1
-    ? LATEST_YEAR+' figures for your pinned country — pin up to 4 to compare.'
-    : LATEST_YEAR+' figures for your pinned countries — the map outline, ranking, trend chart, and tables follow the same pins.';
+    ? tf('{y} figures for your pinned country — pin up to 4 to compare.',{y:LATEST_YEAR})
+    : tf('{y} figures for your pinned countries — the map outline, ranking, trend chart, and tables follow the same pins.',{y:LATEST_YEAR});
   var maxCo2 = d3.max(state.pinned, function(iso){ return byIso[iso].co2 || 0; });
   var maxPc  = d3.max(state.pinned, function(iso){ return byIso[iso].co2_per_capita || 0; });
   cols.innerHTML='';
@@ -729,21 +947,28 @@ function renderCompareCard(){
     var head = document.createElement('div'); head.className='cmp-head';
     var nm = document.createElement('div'); nm.className='cmp-name';
     var dot = document.createElement('span'); dot.className='pin-dot'; dot.style.background='var('+CAT_HEX[i]+')';
-    nm.appendChild(dot); nm.appendChild(document.createTextNode(c.country));
+    nm.appendChild(dot); nm.appendChild(document.createTextNode(cname(c)));
+    var acts = document.createElement('div');
+    acts.style.display='flex'; acts.style.alignItems='center'; acts.style.gap='2px'; acts.style.flex='none';
+    var pdf = document.createElement('button'); pdf.type='button'; pdf.className='chip-x'; pdf.textContent='⎙';
+    pdf.title = t('One-pager (PDF) for ')+cname(c);
+    pdf.setAttribute('aria-label',t('One-pager (PDF) for ')+cname(c));
+    pdf.addEventListener('click', function(){ openOnePager(iso); });
     var x = document.createElement('button'); x.type='button'; x.className='chip-x'; x.textContent='×';
-    x.setAttribute('aria-label','Unpin '+c.country);
+    x.setAttribute('aria-label',t('Unpin ')+cname(c));
     x.addEventListener('click', function(){ togglePin(iso); });
-    head.appendChild(nm); head.appendChild(x);
+    acts.appendChild(pdf); acts.appendChild(x);
+    head.appendChild(nm); head.appendChild(acts);
     col.appendChild(head);
 
     col.appendChild(cmpStat('CO₂, '+LATEST_YEAR, cmpVal(fmtMt(c.co2)),
       (c.co2!=null && maxCo2>0) ? c.co2/maxCo2 : null, CAT_HEX[i]));
-    col.appendChild(cmpStat('Per person', cmpVal(c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2)+' t':'—'),
+    col.appendChild(cmpStat(t('Per person'), cmpVal(c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2)+' t':'—'),
       (c.co2_per_capita!=null && maxPc>0) ? c.co2_per_capita/maxPc : null, CAT_HEX[i]));
-    col.appendChild(cmpStat('Share of global CO₂', cmpVal(fmtPct(c.share_global_co2))));
-    col.appendChild(cmpStat('Cumulative since 1750', cmpVal(fmtMt(c.cumulative_co2))));
-    col.appendChild(cmpStat('Share of warming', cmpVal(fmtPct(c.share_of_temperature_change_from_ghg))));
-    col.appendChild(cmpStat('Fair share', cmpVal(c.fair_share_ratio!=null?fmtNum(c.fair_share_ratio,2)+'×':'—')));
+    col.appendChild(cmpStat(t('Share of global CO₂'), cmpVal(fmtPct(c.share_global_co2))));
+    col.appendChild(cmpStat(t('Cumulative since 1750'), cmpVal(fmtMt(c.cumulative_co2))));
+    col.appendChild(cmpStat(t('Share of warming'), cmpVal(fmtPct(c.share_of_temperature_change_from_ghg))));
+    col.appendChild(cmpStat(t('Fair share'), cmpVal(c.fair_share_ratio!=null?fmtNum(c.fair_share_ratio,2)+'×':'—')));
 
     var cagr = trendCAGR(iso);
     var tv = document.createElement('span'); tv.className='v';
@@ -754,24 +979,24 @@ function renderCompareCard(){
       pill.textContent = (cagr<0?'↓ ':'↑ ')+fmtNum(Math.abs(cagr*100),1)+'%/yr';
       tv.appendChild(pill);
     }
-    col.appendChild(cmpStat('10-yr trend', tv));
+    col.appendChild(cmpStat(t('10-yr trend'), tv));
 
     var nz = NET_ZERO[iso];
     var nv = document.createElement('span'); nv.className='v';
     var badge = document.createElement('span');
-    if(!nz){ badge.className='target-badge none'; badge.textContent='Not tracked'; }
-    else if(nz.year==null){ badge.className='target-badge none'; badge.textContent='None'; }
-    else { badge.className='target-badge'+(nz.status==='law'?' law':''); badge.textContent = nz.year+' · '+nz.statusLabel; }
+    if(!nz){ badge.className='target-badge none'; badge.textContent=t('Not tracked'); }
+    else if(nz.year==null){ badge.className='target-badge none'; badge.textContent=t('None'); }
+    else { badge.className='target-badge'+(nz.status==='law'?' law':''); badge.textContent = nz.year+' · '+t(nz.statusLabel); }
     nv.appendChild(badge);
-    col.appendChild(cmpStat('Net-zero target', nv));
+    col.appendChild(cmpStat(t('Net-zero target'), nv));
 
     var h = HISTORY[iso];
     if(h && h.co2 && h.co2.some(function(v){return v!=null;})){
       var sl = document.createElement('div'); sl.className='panel-spark-label'; sl.style.marginTop='10px';
-      sl.textContent = 'CO₂, 1950–'+LATEST_YEAR+' (Mt/yr)';
+      sl.textContent = tf('CO₂, 1950–{y} (Mt/yr)',{y:LATEST_YEAR})+(SHOW_ALIGNED?' · '+t('dashed: 1.5°C path'):'');
       col.appendChild(sl);
       var pts = h.years.map(function(y,idx){return {x:y,y:h.co2[idx]};}).filter(function(p){return p.y!=null && p.x>=1950;});
-      col.appendChild(drawMiniLine(pts, 'var('+CAT_HEX[i]+')'));
+      col.appendChild(drawMiniLine(pts, 'var('+CAT_HEX[i]+')', {aligned:true}));
     }
     cols.appendChild(col);
   });
@@ -781,14 +1006,25 @@ function renderCompareCard(){
 // With 2+ pins the trend card swaps its fixed top-6 series for the pinned
 // countries; a single pin keeps the top-6 context (its own trend already
 // shows in the detail panel and compare card).
+// 1.5C-consistent reference: the IPCC SR1.5 global benchmark -- net-zero CO2
+// around 2050 -- drawn as a straight-line decline from the latest actual
+// value to zero at 2050. Applied uniformly to every series; that is a stated
+// simplification (equity-based paths differ by country), not a national pledge.
+var ALIGNED_ZERO_YEAR = 2050;
+var SHOW_ALIGNED = LATEST_YEAR < ALIGNED_ZERO_YEAR;
+function alignedValueAt(baseValue, baseYear, year){
+  return baseValue * Math.max(0, (ALIGNED_ZERO_YEAR - year) / (ALIGNED_ZERO_YEAR - baseYear));
+}
+
 function trendIsos(){ return state.pinned.length>=2 ? state.pinned : TOP_TREND_ISOS; }
 function renderTrendAll(){
   var pinnedMode = state.pinned.length>=2;
   document.getElementById('trend-title').textContent = pinnedMode
-    ? 'Your comparison, 1950–'+LATEST_YEAR : 'Who has driven the rise, 1950–'+LATEST_YEAR;
-  document.getElementById('trend-desc').textContent = pinnedMode
-    ? 'Annual territorial CO₂ emissions for your pinned countries.'
-    : 'Annual territorial CO₂ emissions for the six largest current emitters.';
+    ? tf('Your comparison, 1950–{y}',{y:LATEST_YEAR}) : tf('Who has driven the rise, 1950–{y}',{y:LATEST_YEAR});
+  document.getElementById('trend-desc').textContent = (pinnedMode
+    ? t('Annual territorial CO₂ emissions for your pinned countries.')
+    : t('Annual territorial CO₂ emissions for the six largest current emitters.'))
+    + (SHOW_ALIGNED ? ' '+tf('Dashed: a 1.5°C-consistent reference — straight-line decline to net zero by {y}, the global IPCC benchmark applied uniformly, not a national pledge.',{y:ALIGNED_ZERO_YEAR}) : '');
   renderTrendLegend();
   renderTrendChart();
   renderTrendTable();
@@ -797,17 +1033,23 @@ function renderTrendLegend(){
   var el = document.getElementById('trend-legend');
   el.innerHTML = '';
   trendIsos().forEach(function(iso, i){
-    var c = byIso[iso];
     var chip = document.createElement('div'); chip.className='legend-chip';
     var sw = document.createElement('span'); sw.className='sw'; sw.style.background='var('+CAT_HEX[i]+')';
-    chip.appendChild(sw); chip.appendChild(document.createTextNode(c?c.country:iso));
+    chip.appendChild(sw); chip.appendChild(document.createTextNode(cnameIso(iso)));
     el.appendChild(chip);
   });
+  if(SHOW_ALIGNED){
+    var chip2 = document.createElement('div'); chip2.className='legend-chip';
+    var sw2 = document.createElement('span'); sw2.className='sw sw-dashed';
+    chip2.appendChild(sw2);
+    chip2.appendChild(document.createTextNode(tf('1.5°C-aligned path → net zero {y}',{y:ALIGNED_ZERO_YEAR})));
+    el.appendChild(chip2);
+  }
 }
 function renderTrendChart(){
   var container = document.getElementById('trend-body');
   container.innerHTML = '';
-  var w=560,h=380,ml=60,mr=86,mt=14,mb=28;
+  var w=560,h=380,ml=60,mr=86,mt=36,mb=28;
   var svgEl = d3.select(document.createElementNS('http://www.w3.org/2000/svg','svg'));
   svgEl.attr('viewBox','0 0 '+w+' '+h).attr('width','100%').style('height','auto').style('display','block');
   container.appendChild(svgEl.node());
@@ -816,16 +1058,17 @@ function renderTrendChart(){
     var h2 = HISTORY[iso];
     if(!h2) return null;
     var pts = h2.years.map(function(y,idx){return {x:y,y:h2.co2[idx]};}).filter(function(p){return p.y!=null && p.x>=1950;});
-    return {iso:iso, name:h2.country, color:'var('+CAT_HEX[i]+')', points:pts};
+    return {iso:iso, name:cnameIso(iso), color:'var('+CAT_HEX[i]+')', points:pts};
   }).filter(function(s){ return s && s.points.length; });
   if(!series.length){
     var none = document.createElement('div'); none.className='panel-empty'; none.style.padding='24px 0';
-    none.textContent = 'No emissions history available for the pinned countries.';
+    none.textContent = t('No emissions history available for the pinned countries.');
     container.appendChild(none);
     return;
   }
   var xmin = d3.min(series, function(s){ return s.points[0].x; });
-  var xmax = d3.max(series, function(s){ return s.points[s.points.length-1].x; });
+  var xmaxData = d3.max(series, function(s){ return s.points[s.points.length-1].x; });
+  var xmax = SHOW_ALIGNED ? ALIGNED_ZERO_YEAR : xmaxData;
   var x = d3.scaleLinear().domain([xmin, xmax]).range([ml, w-mr]);
   var ymax = d3.max(series, function(s){ return d3.max(s.points, function(p){return p.y;}); });
   var y = d3.scaleLinear().domain([0, ymax*1.06]).range([h-mb, mt]);
@@ -836,17 +1079,24 @@ function renderTrendChart(){
     g.append('line').attr('class','gridline').attr('x1',ml).attr('x2',w-mr).attr('y1',y(t)).attr('y2',y(t));
     g.append('text').attr('class','axis-label').attr('x',ml-6).attr('y',y(t)+3).attr('text-anchor','end').text(fmtMt(t));
   });
-  var yrTicks = (xmin===1950 && xmax===LATEST_YEAR) ? [1950,1975,2000,LATEST_YEAR] : x.ticks(4);
+  var yrTicks = (xmin===1950 && xmax===ALIGNED_ZERO_YEAR) ? [1950,1975,2000,2025,ALIGNED_ZERO_YEAR]
+    : (xmin===1950 && xmax===LATEST_YEAR) ? [1950,1975,2000,LATEST_YEAR] : x.ticks(4);
   yrTicks.forEach(function(yr){
     g.append('text').attr('class','axis-label').attr('x',x(yr)).attr('y',h-mb+16).attr('text-anchor','middle').text(yr);
   });
   g.append('line').attr('class','baseline').attr('x1',ml).attr('x2',w-mr).attr('y1',h-mb).attr('y2',h-mb);
+  drawMilestones(g, x, MILESTONES.global, 0, h-mb);
 
   var line = d3.line().x(function(p){return x(p.x);}).y(function(p){return y(p.y);}).curve(d3.curveMonotoneX);
   series.forEach(function(s){
     g.append('path').datum(s.points).attr('class','trend-line').attr('d',line).style('stroke', s.color);
     var last = s.points[s.points.length-1];
+    s.last = last;
     s.endY = y(last.y);
+    if(SHOW_ALIGNED){
+      g.append('path').datum([{x:last.x, y:last.y}, {x:ALIGNED_ZERO_YEAR, y:0}])
+        .attr('class','aligned-line').attr('d',line).style('stroke', s.color);
+    }
     g.append('circle').attr('cx',x(last.x)).attr('cy',s.endY).attr('r',3.5).attr('class','trend-dot').style('fill', s.color);
   });
   // Direct end-labels, skipped where they'd collide (converging lines) -- the
@@ -880,11 +1130,16 @@ function renderTrendChart(){
     var yr = Math.round(x.invert(mx));
     yr = Math.max(xmin, Math.min(xmax, yr));
     crosshair.attr('x1',x(yr)).attr('x2',x(yr)).style('opacity',1);
+    var future = SHOW_ALIGNED && yr > xmaxData;
     var rows = series.map(function(s){
       var pt = s.points.filter(function(p){return p.x===yr;})[0];
-      return {name:s.name, color:s.color, val: pt?pt.y:null};
+      var val = pt ? pt.y : null;
+      if(val==null && SHOW_ALIGNED && yr > s.last.x){
+        val = alignedValueAt(s.last.y, s.last.x, yr);
+      }
+      return {name:s.name, color:s.color, val: val};
     }).sort(function(a,b){ return (b.val||0)-(a.val||0); });
-    var html = '<div class="ct-x">'+yr+'</div>';
+    var html = '<div class="ct-x">'+yr+(future?' · '+t('1.5°C-aligned path'):'')+'</div>';
     rows.forEach(function(r){
       html += '<div class="ct-row"><span class="k"><span class="sw" style="background:'+r.color+'"></span>'+escapeHtml(r.name)+'</span><span class="v">'+fmtMt(r.val)+'</span></div>';
     });
@@ -902,8 +1157,8 @@ function renderTrendTable(){
     HISTORY[iso].years.forEach(function(y){ if(y>=1950) yearSet[y]=1; });
   });
   var years = Object.keys(yearSet).map(Number).sort(function(a,b){return a-b;});
-  var html = '<div class="table-scroll"><div class="table-wrap"><table class="data-table"><thead><tr><th>Year</th>';
-  isos.forEach(function(iso){ html += '<th>'+escapeHtml(byIso[iso] ? byIso[iso].country : iso)+'</th>'; });
+  var html = '<div class="table-scroll"><div class="table-wrap"><table class="data-table"><thead><tr><th>'+t('Year')+'</th>';
+  isos.forEach(function(iso){ html += '<th>'+escapeHtml(cnameIso(iso))+'</th>'; });
   html += '</tr></thead><tbody>';
   years.slice().reverse().forEach(function(yr){
     html += '<tr><td>'+yr+'</td>';
@@ -935,7 +1190,7 @@ function renderAreaLegend(){
 function renderAreaChart(){
   var container = document.getElementById('area-body');
   container.innerHTML='';
-  var w=860,h=300,ml=62,mr=16,mt=14,mb=28;
+  var w=860,h=300,ml=62,mr=16,mt=36,mb=28;
   var svgEl = d3.select(document.createElementNS('http://www.w3.org/2000/svg','svg'));
   svgEl.attr('viewBox','0 0 '+w+' '+h).attr('width','100%').style('height','auto').style('display','block');
   container.appendChild(svgEl.node());
@@ -963,6 +1218,8 @@ function renderAreaChart(){
     g.append('path').datum(layer).attr('d',area).style('fill','var('+CAT_HEX[i]+')').style('opacity',0.92)
       .style('stroke','var(--chart-surface)').style('stroke-width',1);
   });
+  // dense treaty cluster on a 124-year axis: label only Kyoto and Paris here
+  drawMilestones(g, x, MILESTONES.global, 0, h-mb, {labelYears:[1997,2015]});
 
   var tooltip = document.createElement('div'); tooltip.className='chart-tooltip';
   container.style.position='relative';
@@ -1013,6 +1270,7 @@ var SECTOR_LABELS = {
   energy:'Energy', industry:'Industrial processes', agriculture:'Agriculture',
   waste:'Waste', land_use:'Land use & forestry'
 };
+function sectorLabel(k){ return t(SECTOR_LABELS[k]); }
 function sectorIsos(){
   var isos = state.pinned.length ? state.pinned.slice() : TOP_TREND_ISOS.slice();
   if(state.selectedIso && isos.indexOf(state.selectedIso)<0) isos.push(state.selectedIso);
@@ -1028,30 +1286,25 @@ function renderSectorLegend(){
   SECTOR_KEYS.forEach(function(k,i){
     var chip=document.createElement('div'); chip.className='legend-chip area';
     var sw=document.createElement('span'); sw.className='sw'; sw.style.background='var('+CAT_HEX[i]+')';
-    chip.appendChild(sw); chip.appendChild(document.createTextNode(SECTOR_LABELS[k]));
+    chip.appendChild(sw); chip.appendChild(document.createTextNode(sectorLabel(k)));
     el.appendChild(chip);
   });
 }
 function renderSectors(){
-  document.getElementById('sectors-title').textContent = 'Emissions by sector, '+SECTORS.year;
+  document.getElementById('sectors-title').textContent = tf('Emissions by sector, {y}',{y:SECTORS.year});
   var w = SECTORS.world, wg = sectorGross(w);
   document.getElementById('sectors-desc').textContent =
-    'All greenhouse gases in CO₂-equivalents — the lens that makes agriculture and waste visible. '
-    + 'Globally: energy '+fmtNum(w.energy/wg*100,0)+'%, agriculture '+fmtNum(w.agriculture/wg*100,0)
-    + '%, industrial processes '+fmtNum(w.industry/wg*100,0)+'%, waste '+fmtNum(w.waste/wg*100,0)
-    + '%. Rows follow your pinned or selected countries.';
+    tf('All greenhouse gases in CO₂-equivalents — the lens that makes agriculture and waste visible. Globally: energy {e}%, agriculture {a}%, industrial processes {i}%, waste {w}%. Rows follow your pinned or selected countries.',
+      { e:fmtNum(w.energy/wg*100,0), a:fmtNum(w.agriculture/wg*100,0),
+        i:fmtNum(w.industry/wg*100,0), w:fmtNum(w.waste/wg*100,0) });
   document.getElementById('sectors-note').textContent =
-    'Source: Climate Watch via Our World in Data, '+SECTORS.year+', all gases as CO₂e. '
-    + '“Energy” bundles all fuel combustion — power, transport, buildings, manufacturing, fugitive and bunker fuels — '
-    + 'so “industrial processes” covers only non-energy emissions such as cement chemistry. '
-    + 'Land use & forestry can be negative: a net sink, drawn left of the axis. '
-    + 'Sector data lags the rest of the dashboard by a year and is unavailable for some small territories.';
+    tf('Source: Climate Watch via Our World in Data, {y}, all gases as CO₂e. “Energy” bundles all fuel combustion — power, transport, buildings, manufacturing, fugitive and bunker fuels — so “industrial processes” covers only non-energy emissions such as cement chemistry. Land use & forestry can be negative: a net sink, drawn left of the axis. Sector data lags the rest of the dashboard by a year and is unavailable for some small territories.',{y:SECTORS.year});
   renderSectorLegend();
 
   var body = document.getElementById('sectors-body');
   body.innerHTML='';
   var rows = sectorIsos().map(function(iso){
-    return { iso:iso, name: byIso[iso]?byIso[iso].country:iso, s: SECTORS.countries[iso] };
+    return { iso:iso, name: cnameIso(iso), s: SECTORS.countries[iso] };
   });
 
   var posMax=0, negMin=0;
@@ -1063,7 +1316,7 @@ function renderSectors(){
   });
   if(posMax<=0){
     var p=document.createElement('div'); p.className='panel-empty';
-    p.textContent='No sector data for the current countries.';
+    p.textContent=t('No sector data for the current countries.');
     body.appendChild(p);
     renderSectorTable();
     return;
@@ -1091,7 +1344,7 @@ function renderSectors(){
 
     var track = document.createElement('div'); track.className='s-track';
     if(!r.s){
-      var nd=document.createElement('span'); nd.className='sector-nodata'; nd.textContent='No sector data';
+      var nd=document.createElement('span'); nd.className='sector-nodata'; nd.textContent=t('No sector data');
       track.appendChild(nd);
       row.appendChild(track);
       var v0=document.createElement('div'); v0.className='s-val'; v0.textContent='—';
@@ -1111,8 +1364,8 @@ function renderSectors(){
       seg.style.width = Math.max(0.15, x(b)-x(a))+'%';
       seg.style.background = 'var('+CAT_HEX[i]+')';
       var tipHtml = '<div class="t-name">'+escapeHtml(r.name)+'</div>'
-        + '<div class="t-val">'+SECTOR_LABELS[k]+': '+(v<0?'−':'')+fmtMt(Math.abs(v))+' CO₂e</div>'
-        + '<div class="t-rank">'+(v<0 ? 'Net sink' : fmtNum(v/gross*100,0)+'% of gross emissions')+'</div>';
+        + '<div class="t-val">'+sectorLabel(k)+': '+(v<0?'−':'')+fmtMt(Math.abs(v))+' CO₂e</div>'
+        + '<div class="t-rank">'+(v<0 ? t('Net sink') : fmtNum(v/gross*100,0)+t('% of gross emissions'))+'</div>';
       seg.addEventListener('mousemove', function(ev){
         tip.innerHTML = tipHtml;
         tip.style.left = ev.clientX+'px';
@@ -1129,7 +1382,7 @@ function renderSectors(){
     row.appendChild(track);
     var val=document.createElement('div'); val.className='s-val';
     val.textContent = fmtMt(net);
-    val.title = 'Net total, all sectors';
+    val.title = t('Net total, all sectors');
     row.appendChild(val);
     body.appendChild(row);
   });
@@ -1158,14 +1411,13 @@ function renderSectors(){
 }
 function renderSectorTable(){
   var el = document.getElementById('sectors-table');
-  var html = '<div class="table-scroll"><div class="table-wrap"><table class="data-table"><thead><tr><th>Country</th>';
-  SECTOR_KEYS.forEach(function(k){ html += '<th>'+SECTOR_LABELS[k]+'</th>'; });
-  html += '<th>Net total</th></tr></thead><tbody>';
+  var html = '<div class="table-scroll"><div class="table-wrap"><table class="data-table"><thead><tr><th>'+t('Country')+'</th>';
+  SECTOR_KEYS.forEach(function(k){ html += '<th>'+sectorLabel(k)+'</th>'; });
+  html += '<th>'+t('Net total')+'</th></tr></thead><tbody>';
   sectorIsos().forEach(function(iso){
     var s = SECTORS.countries[iso];
-    var name = byIso[iso] ? byIso[iso].country : iso;
-    html += '<tr><td>'+escapeHtml(name)+'</td>';
-    if(!s){ html += '<td colspan="6" style="text-align:left;font-style:italic;">No sector data</td></tr>'; return; }
+    html += '<tr><td>'+escapeHtml(cnameIso(iso))+'</td>';
+    if(!s){ html += '<td colspan="6" style="text-align:left;font-style:italic;">'+t('No sector data')+'</td></tr>'; return; }
     var net=0;
     SECTOR_KEYS.forEach(function(k){ net+=s[k]; html += '<td>'+fmtNum(s[k])+'</td>'; });
     html += '<td>'+fmtNum(net)+'</td></tr>';
@@ -1194,7 +1446,9 @@ var tableSort = {key:'co2', dir:-1};
 function escapeHtml(s){ return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function renderCountryTable(){
   var q = (document.getElementById('table-search').value||'').toLowerCase().trim();
-  var rows = COUNTRIES.filter(function(c){ return !q || c.country.toLowerCase().indexOf(q)>-1; });
+  var rows = COUNTRIES.filter(function(c){
+    return !q || c.country.toLowerCase().indexOf(q)>-1 || cname(c).toLowerCase().indexOf(q)>-1;
+  });
   rows.sort(function(a,b){
     var av=a[tableSort.key], bv=b[tableSort.key];
     if(av==null) return 1; if(bv==null) return -1;
@@ -1211,10 +1465,10 @@ function renderCountryTable(){
         +(pi>=0?' style="color:var('+CAT_HEX[pi]+')"':'')
         +' aria-pressed="'+(pi>=0)+'" title="'+(pi>=0?'Remove from comparison':'Pin to compare')+'">'+(pi>=0?'★':'☆')+'</button> '
       : '<span class="row-pin" style="visibility:hidden">☆</span> ';
-    html += '<tr data-iso="'+c.iso_code+'"><td>'+star+escapeHtml(c.country)+'</td><td>'+fmtNum(c.co2)+'</td><td>'+(c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2):'—')+'</td><td>'+fmtNum(c.cumulative_co2)+'</td><td>'+(c.share_global_co2!=null?fmtNum(c.share_global_co2,2):'—')+'</td><td>'+(c.share_of_temperature_change_from_ghg!=null?fmtNum(c.share_of_temperature_change_from_ghg,2):'—')+'</td></tr>';
+    html += '<tr data-iso="'+c.iso_code+'"><td>'+star+escapeHtml(cname(c))+'</td><td>'+fmtNum(c.co2)+'</td><td>'+(c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2):'—')+'</td><td>'+fmtNum(c.cumulative_co2)+'</td><td>'+(c.share_global_co2!=null?fmtNum(c.share_global_co2,2):'—')+'</td><td>'+(c.share_of_temperature_change_from_ghg!=null?fmtNum(c.share_of_temperature_change_from_ghg,2):'—')+'</td></tr>';
   });
   body.innerHTML = html;
-  document.getElementById('table-count').textContent = rows.length+' countries';
+  document.getElementById('table-count').textContent = tf('{n} countries',{n:rows.length});
   Array.prototype.forEach.call(body.children, function(tr){
     tr.style.cursor='pointer';
     tr.addEventListener('click', function(){ selectCountry(tr.getAttribute('data-iso')); });
@@ -1222,7 +1476,26 @@ function renderCountryTable(){
   Array.prototype.forEach.call(body.querySelectorAll('.row-pin'), function(b){
     b.addEventListener('click', function(e){ e.stopPropagation(); togglePin(b.getAttribute('data-pin')); });
   });
+  updateSortHeaders();
   highlightTableRow(state.selectedIso);
+}
+function updateSortHeaders(){
+  document.querySelectorAll('#country-table th[data-sort]').forEach(function(th){
+    var key = th.getAttribute('data-sort');
+    var active = key===tableSort.key;
+    // the string sort inverts dir (see renderCountryTable), so the arrow
+    // reflects the visual order, not the raw dir sign
+    var desc = tableSort.dir===-1;
+    if(key==='country') desc = !desc;
+    th.classList.toggle('sorted', active);
+    if(active){
+      th.setAttribute('data-dir', desc ? '↓' : '↑');
+      th.setAttribute('aria-sort', desc ? 'descending' : 'ascending');
+    } else {
+      th.removeAttribute('data-dir');
+      th.removeAttribute('aria-sort');
+    }
+  });
 }
 document.querySelectorAll('#country-table th[data-sort]').forEach(function(th){
   th.addEventListener('click', function(){
@@ -1241,34 +1514,41 @@ function renderIncomeChart(){
   el.innerHTML = '';
   INCOME_GROUPS.forEach(function(g){
     var row = document.createElement('div'); row.className='income-row';
-    var label = document.createElement('div'); label.className='i-label'; label.textContent = g.label;
+    var label = document.createElement('div'); label.className='i-label'; label.textContent = t(g.label);
     var bars = document.createElement('div'); bars.className='i-bars';
 
     var t1 = document.createElement('div'); t1.className='income-bar-track';
     var f1 = document.createElement('div'); f1.className='income-bar-fill pop'; f1.style.width=(g.pop_share/maxVal*100)+'%';
     t1.appendChild(f1);
-    var v1 = document.createElement('div'); v1.className='i-val'; v1.textContent = fmtNum(g.pop_share,1)+'% of population';
+    var v1 = document.createElement('div'); v1.className='i-val';
+    v1.textContent = tf('{p}% of population',{p:fmtNum(g.pop_share,1)});
 
     var t2 = document.createElement('div'); t2.className='income-bar-track';
     var f2 = document.createElement('div'); f2.className='income-bar-fill emit'; f2.style.width=(g.share_global_cumulative_co2/maxVal*100)+'%';
     t2.appendChild(f2);
-    var v2 = document.createElement('div'); v2.className='i-val'; v2.textContent = fmtNum(g.share_global_cumulative_co2,1)+'% of cumulative CO₂';
+    var v2 = document.createElement('div'); v2.className='i-val';
+    v2.textContent = tf('{p}% of cumulative CO₂',{p:fmtNum(g.share_global_cumulative_co2,1)});
 
     bars.appendChild(t1); bars.appendChild(v1); bars.appendChild(t2); bars.appendChild(v2);
     row.appendChild(label); row.appendChild(bars);
     el.appendChild(row);
   });
 
+  // one synthesis callout -- the bars themselves already carry every number
   var callouts = document.getElementById('income-callouts');
   callouts.innerHTML = '';
-  INCOME_GROUPS.forEach(function(g){
-    var ratio = g.share_global_cumulative_co2 / g.pop_share;
+  var hi = INCOME_GROUPS.filter(function(g){return g.key==='high';})[0];
+  var lo = INCOME_GROUPS.filter(function(g){return g.key==='low';})[0];
+  if(hi && lo){
     var div = document.createElement('div'); div.className='callout';
-    div.innerHTML = '<b>'+escapeHtml(g.label)+'</b> countries hold ' + fmtNum(g.pop_share,1) +
-      '% of global population and are responsible for ' + fmtNum(g.share_global_cumulative_co2,1) +
-      '% of cumulative CO₂ since 1750 &mdash; <b>' + fmtNum(ratio,1) + '×</b> their population share.';
+    div.innerHTML = tf('<b>High-income</b> countries hold {hp}% of global population but {hc}% of cumulative CO₂ since 1750 — <b>{hx}×</b> their population share. <b>Low-income</b> countries: {lp}% of people, {lc}% of the CO₂ — <b>{lx}×</b>.',{
+      hp: fmtNum(hi.pop_share,1), hc: fmtNum(hi.share_global_cumulative_co2,1),
+      hx: fmtNum(hi.share_global_cumulative_co2/hi.pop_share,1),
+      lp: fmtNum(lo.pop_share,1), lc: fmtNum(lo.share_global_cumulative_co2,1),
+      lx: fmtNum(lo.share_global_cumulative_co2/lo.pop_share,1)
+    });
     callouts.appendChild(div);
-  });
+  }
 }
 
 /* ================= targets vs. trajectory ================= */
@@ -1302,7 +1582,7 @@ function renderTargetsTable(){
       var pd = document.createElement('span'); pd.className='pin-dot'; pd.style.background=pinColor(r.iso);
       tdName.appendChild(pd);
     }
-    tdName.appendChild(document.createTextNode(r.c.country));
+    tdName.appendChild(document.createTextNode(cname(r.c)));
     var tdCo2 = document.createElement('td'); tdCo2.textContent = fmtMt(r.c.co2);
     var tdTrend = document.createElement('td');
     if(r.cagr==null){ tdTrend.textContent = '—'; }
@@ -1316,10 +1596,10 @@ function renderTargetsTable(){
     var badge = document.createElement('span');
     if(!r.nz || r.nz.year==null){
       badge.className = 'target-badge none';
-      badge.textContent = r.nz ? r.nz.statusLabel : 'No data';
+      badge.textContent = r.nz ? t(r.nz.statusLabel) : t('No data');
     } else {
       badge.className = 'target-badge' + (r.nz.status==='law' ? ' law' : '');
-      badge.textContent = r.nz.year + ' · ' + r.nz.statusLabel;
+      badge.textContent = r.nz.year + ' · ' + t(r.nz.statusLabel);
     }
     tdTarget.appendChild(badge);
     tr.appendChild(tdName); tr.appendChild(tdCo2); tr.appendChild(tdTrend); tr.appendChild(tdTarget);
@@ -1329,9 +1609,9 @@ function renderTargetsTable(){
 
 /* ================= what-if scenario ================= */
 function scenarioGroups(){
-  var groups = { top6: { label:'Top 6 emitters', isos: TOP_TREND_ISOS } };
-  if(state.pinned.length) groups.pinned = { label:'Pinned countries', isos: state.pinned.slice() };
-  groups.global = { label:'All countries (global)', isos: null };
+  var groups = { top6: { label:t('Top 6 emitters'), isos: TOP_TREND_ISOS } };
+  if(state.pinned.length) groups.pinned = { label:t('Pinned countries'), isos: state.pinned.slice() };
+  groups.global = { label:t('All countries (global)'), isos: null };
   return groups;
 }
 var scenarioState = { group:'top6', reduction:30, year:2035 };
@@ -1386,6 +1666,13 @@ function renderScenario(){
   var histYears = []; for(var hy=LATEST_YEAR-14; hy<=LATEST_YEAR; hy++) histYears.push(hy);
   var histVals = groupSeriesAtYears(histYears);
   var base = histVals[histVals.length-1];
+  if(base==null || !(base>0)){
+    document.getElementById('scenario-results').innerHTML = '';
+    document.getElementById('scenario-legend').innerHTML = '';
+    document.getElementById('scenario-body').innerHTML =
+      '<div class="panel-empty" style="padding:16px 0;">'+t('No emissions history available for this group of countries.')+'</div>';
+    return;
+  }
 
   var projYears = []; for(var py=y0; py<=y1; py++) projYears.push(py);
   var reduced = base * (1 - scenarioState.reduction/100);
@@ -1401,28 +1688,41 @@ function renderScenario(){
   var groupLabel = groupDef.label;
   var results = document.getElementById('scenario-results');
   results.innerHTML = '';
+  var alignedAtTarget = SHOW_ALIGNED ? alignedValueAt(base, y0, y1) : null;
+  var gapTile;
+  if(alignedAtTarget==null){
+    gapTile = null;
+  } else if(reduced <= alignedAtTarget){
+    gapTile = { l: tf('Against the 1.5°C path in {y}',{y:y1}), v: t('On track'),
+      sub: tf('at or below the aligned level of {v} /yr',{v:fmtMt(alignedAtTarget)}) };
+  } else {
+    gapTile = { l: tf('Against the 1.5°C path in {y}',{y:y1}), v: '+'+fmtMt(reduced-alignedAtTarget)+' /yr',
+      sub: tf('above the aligned level of {v} /yr',{v:fmtMt(alignedAtTarget)}) };
+  }
   [
-    { l: 'Emissions in '+y1+' — '+groupLabel, v: fmtMt(reduced)+' /yr', sub: 'vs. '+fmtMt(base)+' /yr held flat from '+LATEST_YEAR },
-    { l: 'Cumulative CO₂ avoided by '+y1, v: fmtNum(avoidedGt,1)+' Gt', sub: 'vs. holding at '+LATEST_YEAR+' levels the whole way' },
-    { l: 'Illustrative avoided warming', v: fmtWarm(warmMid), sub: 'likely range '+fmtWarm(warmLo)+'–'+fmtWarm(warmHi) }
-  ].forEach(function(t){
+    { l: tf('Emissions in {y} — {g}',{y:y1, g:groupLabel}), v: fmtMt(reduced)+' /yr', sub: tf('vs. {v} /yr held flat from {y}',{v:fmtMt(base), y:LATEST_YEAR}) },
+    { l: tf('Cumulative CO₂ avoided by {y}',{y:y1}), v: fmtNum(avoidedGt,1)+' Gt', sub: tf('vs. holding at {y} levels the whole way',{y:LATEST_YEAR}) },
+    { l: t('Illustrative avoided warming'), v: fmtWarm(warmMid), sub: tf('likely range {a}–{b}',{a:fmtWarm(warmLo), b:fmtWarm(warmHi)}) }
+  ].concat(gapTile ? [gapTile] : []).forEach(function(tile){
     var d = document.createElement('div'); d.className='scenario-tile';
-    var l = document.createElement('div'); l.className='l'; l.textContent=t.l;
-    var v = document.createElement('div'); v.className='v num'; v.textContent=t.v;
-    var s = document.createElement('div'); s.className='sub'; s.textContent=t.sub;
+    var l = document.createElement('div'); l.className='l'; l.textContent=tile.l;
+    var v = document.createElement('div'); v.className='v num'; v.textContent=tile.v;
+    var s = document.createElement('div'); s.className='sub'; s.textContent=tile.sub;
     d.appendChild(l); d.appendChild(v); d.appendChild(s);
     results.appendChild(d);
   });
 
   var legend = document.getElementById('scenario-legend');
   legend.innerHTML =
-    '<div class="legend-chip"><span class="sw" style="background:var(--text-secondary)"></span>Actual, '+(LATEST_YEAR-14)+'–'+LATEST_YEAR+'</div>'+
-    '<div class="legend-chip"><span class="sw" style="background:var(--text-muted);opacity:.6"></span>If unchanged</div>'+
-    '<div class="legend-chip"><span class="sw" style="background:var(--accent)"></span>With this cut</div>';
+    '<div class="legend-chip"><span class="sw" style="background:var(--text-secondary)"></span>'+tf('Actual, {a}–{b}',{a:LATEST_YEAR-14, b:LATEST_YEAR})+'</div>'+
+    '<div class="legend-chip"><span class="sw" style="background:var(--text-muted);opacity:.6"></span>'+t('If unchanged')+'</div>'+
+    '<div class="legend-chip"><span class="sw" style="background:var(--accent)"></span>'+t('With this cut')+'</div>'+
+    (SHOW_ALIGNED ? '<div class="legend-chip"><span class="sw sw-dashed" style="border-top-color:var(--good)"></span>'+tf('1.5°C-aligned → net zero {y}',{y:ALIGNED_ZERO_YEAR})+'</div>' : '');
 
-  renderScenarioChart(histYears, histVals, projYears, bau, scenario);
+  var aligned = SHOW_ALIGNED ? projYears.map(function(yy){ return alignedValueAt(base, y0, yy); }) : null;
+  renderScenarioChart(histYears, histVals, projYears, bau, scenario, aligned);
 }
-function renderScenarioChart(histYears, histVals, projYears, bau, scenario){
+function renderScenarioChart(histYears, histVals, projYears, bau, scenario, aligned){
   var container = document.getElementById('scenario-body');
   container.innerHTML = '';
   var w=1140,h=280,ml=62,mr=20,mt=14,mb=28;
@@ -1454,6 +1754,13 @@ function renderScenarioChart(histYears, histVals, projYears, bau, scenario){
   g.append('path').datum(bauPts).attr('d',line).attr('fill','none')
     .style('stroke','var(--text-muted)').style('stroke-width',2).style('stroke-dasharray','5,4').style('opacity',.85);
 
+  if(aligned){
+    var alignedPts = projYears.map(function(yr,i){ return {x:yr, y:aligned[i]}; });
+    g.append('path').datum(alignedPts).attr('d',line).attr('fill','none')
+      .style('stroke','var(--good)').style('stroke-width',1.75)
+      .style('stroke-dasharray','4,4').style('opacity',.8);
+  }
+
   var scenPts = projYears.map(function(yr,i){ return {x:yr, y:scenario[i]}; });
   g.append('path').datum(scenPts).attr('d',line).attr('fill','none').style('stroke','var(--accent)').style('stroke-width',2.5);
 
@@ -1462,6 +1769,323 @@ function renderScenarioChart(histYears, histVals, projYears, bau, scenario){
     g.append('circle').attr('cx',x(pt.x)).attr('cy',y(pt.y)).attr('r',3.5).attr('class','trend-dot').style('fill',color);
   });
 }
+
+/* ================= portfolio overlay ================= */
+// Country-level attribution of a holdings list: each line is a country plus a
+// weight (any unit -- normalized to shares). Everything is computed client-
+// side from data already on the page and persisted only to localStorage, so a
+// portfolio never leaves the browser. This is a screening view -- exposure to
+// national emission profiles -- not issuer-level carbon accounting, and the
+// card's footnote says so.
+var PORTFOLIO_KEY = 'carbon-ledger-portfolio';
+var portfolioHoldings = null;   // [{iso, weight}] normalized to sum 100
+
+var nameToIso = {};
+COUNTRIES.forEach(function(c){ nameToIso[c.country.toLowerCase()] = c.iso_code; });
+var COUNTRY_ALIASES = {
+  'usa':'USA', 'us':'USA', 'u.s.':'USA', 'united states of america':'USA', 'america':'USA',
+  'uk':'GBR', 'u.k.':'GBR', 'britain':'GBR', 'great britain':'GBR',
+  'korea':'KOR', 'republic of korea':'KOR', 'uae':'ARE', 'holland':'NLD',
+  'czech republic':'CZE', 'russian federation':'RUS'
+};
+function resolvePortfolioCountry(raw){
+  var s = String(raw||'').trim().replace(/["']/g,'');
+  if(!s) return null;
+  if(s.length===3 && byIso[s.toUpperCase()]) return s.toUpperCase();
+  var low = s.toLowerCase();
+  if(COUNTRY_ALIASES[low]) return COUNTRY_ALIASES[low];
+  if(nameToIso[low]) return nameToIso[low];
+  var hits = COUNTRIES.filter(function(c){ return c.country.toLowerCase().indexOf(low)===0; });
+  if(hits.length!==1) hits = COUNTRIES.filter(function(c){ return c.country.toLowerCase().indexOf(low)>-1; });
+  return hits.length===1 ? hits[0].iso_code : null;
+}
+function parsePortfolio(text){
+  var weights = {}, unmatched = [];
+  String(text||'').split(/\r?\n/).forEach(function(line){
+    var t = line.trim();
+    if(!t || t[0]==='#') return;
+    var name, wRaw;
+    var parts = t.split(/[,;\t]+/).map(function(p){ return p.trim(); }).filter(Boolean);
+    if(parts.length>=2){ name = parts[0]; wRaw = parts[parts.length-1]; }
+    else {
+      var m = /^(.*?)\s+([$€£]?[\d][\d.,]*\s*%?)$/.exec(t);
+      if(!m){ unmatched.push(t); return; }
+      name = m[1]; wRaw = m[2];
+    }
+    var w = parseFloat(String(wRaw).replace(/[^0-9.]/g,''));
+    var iso = resolvePortfolioCountry(name);
+    if(!iso || !(w>0) || !byIso[iso] || byIso[iso].co2==null){ unmatched.push(t); return; }
+    weights[iso] = (weights[iso]||0) + w;
+  });
+  var total = 0;
+  Object.keys(weights).forEach(function(k){ total += weights[k]; });
+  var holdings = Object.keys(weights).map(function(iso){
+    return { iso: iso, weight: weights[iso]/total*100 };
+  }).sort(function(a,b){ return b.weight-a.weight; });
+  return { holdings: holdings, unmatched: unmatched };
+}
+function portfolioMetrics(holdings){
+  var pc=0, pcW=0, fair=0, fairW=0, rising=0, trendW=0;
+  var sec={}, secW=0;
+  SECTOR_KEYS.forEach(function(k){ sec[k]=0; });
+  holdings.forEach(function(h){
+    var c = byIso[h.iso], w = h.weight/100;
+    if(c.co2_per_capita!=null){ pc += w*c.co2_per_capita; pcW += w; }
+    if(c.fair_share_ratio!=null){ fair += w*c.fair_share_ratio; fairW += w; }
+    var g = trendCAGR(h.iso);
+    if(g!=null){ trendW += w; if(g>0) rising += w; }
+    var s = SECTORS.countries[h.iso];
+    if(s){
+      var gross = sectorGross(s);
+      if(gross>0){
+        secW += w;
+        SECTOR_KEYS.forEach(function(k){ sec[k] += w*Math.max(0,s[k])/gross; });
+      }
+    }
+  });
+  if(secW>0) SECTOR_KEYS.forEach(function(k){ sec[k] /= secW; });
+  return {
+    perCapita: pcW>0 ? pc/pcW : null,
+    fairShare: fairW>0 ? fair/fairW : null,
+    risingShare: trendW>0 ? rising/trendW*100 : null,
+    sectors: secW>0 ? sec : null,
+    sectorCoverage: secW*100
+  };
+}
+function savePortfolioText(text){ try{ localStorage.setItem(PORTFOLIO_KEY, text); }catch(e){} }
+function loadPortfolioText(){ try{ return localStorage.getItem(PORTFOLIO_KEY)||''; }catch(e){ return ''; } }
+
+function applyPortfolio(fromBoot){
+  var text = document.getElementById('portfolio-text').value;
+  var note = document.getElementById('portfolio-parse-note');
+  var parsed = parsePortfolio(text);
+  if(!parsed.holdings.length){
+    portfolioHoldings = null;
+    if(!fromBoot){
+      note.textContent = text.trim()
+        ? t('No holdings recognized — use one line per holding: country name or ISO code, then a weight.')
+        : '';
+    }
+    renderPortfolio();
+    return;
+  }
+  portfolioHoldings = parsed.holdings;
+  savePortfolioText(text);
+  note.textContent = tf('{n} countries matched',{n:parsed.holdings.length})
+    + (parsed.unmatched.length ? ' · '+t('not recognized:')+' '+parsed.unmatched.slice(0,4).join(' | ')
+       + (parsed.unmatched.length>4 ? ' (+'+(parsed.unmatched.length-4)+')' : '') : '');
+  renderPortfolio();
+}
+function pfStatTile(label, value, sub){
+  var d = document.createElement('div'); d.className='scenario-tile';
+  var l = document.createElement('div'); l.className='l'; l.textContent=label;
+  var v = document.createElement('div'); v.className='v num'; v.textContent=value;
+  var s = document.createElement('div'); s.className='sub'; s.textContent=sub;
+  s.style.fontSize='11.5px'; s.style.color='var(--text-muted)';
+  d.appendChild(l); d.appendChild(v); d.appendChild(s);
+  return d;
+}
+function renderPortfolio(){
+  var input = document.getElementById('portfolio-input');
+  var results = document.getElementById('portfolio-results');
+  var editBtn = document.getElementById('portfolio-edit-btn');
+  var footNote = document.getElementById('portfolio-note');
+  if(!portfolioHoldings){
+    input.hidden = false; results.hidden = true; editBtn.hidden = true; footNote.hidden = true;
+    return;
+  }
+  input.hidden = true; results.hidden = false; editBtn.hidden = false; footNote.hidden = false;
+  results.innerHTML = '';
+  var mx = portfolioMetrics(portfolioHoldings);
+  var theme = effectiveTheme();
+
+  var tiles = document.createElement('div'); tiles.className='scenario-results';
+  tiles.style.margin='0 0 16px';
+  var vsWorld = mx.perCapita!=null ? mx.perCapita/worldLatest.co2_per_capita : null;
+  tiles.appendChild(pfStatTile(t('Weighted CO₂ per person'), mx.perCapita!=null?fmtNum(mx.perCapita,2)+' t':'—',
+    vsWorld!=null ? tf('{x}× the world average of {v} t',{x:fmtNum(vsWorld,1), v:fmtNum(worldLatest.co2_per_capita,2)}) : ''));
+  tiles.appendChild(pfStatTile(t('Historical responsibility tilt'), mx.fairShare!=null?fmtNum(mx.fairShare,1)+'×':'—',
+    t('exposure-weighted share of cumulative CO₂ ÷ population share')));
+  tiles.appendChild(pfStatTile(t('Weight where emissions rise'), mx.risingShare!=null?fmtNum(mx.risingShare,0)+'%':'—',
+    t('countries with a positive 10-yr CO₂ trend')));
+  var top = portfolioHoldings[0];
+  tiles.appendChild(pfStatTile(t('Largest exposure'), cnameIso(top.iso),
+    tf('{p}% of weight · {n} countries',{p:fmtNum(top.weight,1), n:portfolioHoldings.length})));
+  results.appendChild(tiles);
+
+  var grid = document.createElement('div'); grid.className='pf-grid';
+
+  var left = document.createElement('div');
+  var secLabel = document.createElement('div'); secLabel.className='pf-sec-label';
+  secLabel.textContent = t('Sector exposure of underlying emissions')
+    + (mx.sectorCoverage<99.5 ? ' — '+tf('based on {p}% of weight',{p:fmtNum(mx.sectorCoverage,0)}) : '');
+  left.appendChild(secLabel);
+  if(mx.sectors){
+    var bar = document.createElement('div'); bar.className='pf-secbar';
+    var cum = 0;
+    SECTOR_KEYS.forEach(function(k,i){
+      var frac = mx.sectors[k];
+      if(frac<=0) return;
+      var seg = document.createElement('div'); seg.className='sector-seg';
+      seg.style.left = (cum*100)+'%'; seg.style.width = (frac*100)+'%';
+      seg.style.background = 'var('+CAT_HEX[i]+')';
+      seg.title = sectorLabel(k)+': '+fmtNum(frac*100,1)+'%';
+      bar.appendChild(seg);
+      cum += frac;
+    });
+    left.appendChild(bar);
+    var legend = document.createElement('div'); legend.className='legend-chips'; legend.style.padding='8px 0 0';
+    SECTOR_KEYS.forEach(function(k,i){
+      if(mx.sectors[k]<=0.001) return;
+      var chip = document.createElement('div'); chip.className='legend-chip area';
+      var sw = document.createElement('span'); sw.className='sw'; sw.style.background='var('+CAT_HEX[i]+')';
+      chip.appendChild(sw);
+      chip.appendChild(document.createTextNode(sectorLabel(k)+' '+fmtNum(mx.sectors[k]*100,0)+'%'));
+      legend.appendChild(chip);
+    });
+    left.appendChild(legend);
+  } else {
+    var noSec = document.createElement('div'); noSec.className='views-empty';
+    noSec.textContent = t('No sector data for these countries.');
+    left.appendChild(noSec);
+  }
+
+  var listLabel = document.createElement('div'); listLabel.className='pf-sec-label'; listLabel.style.marginTop='16px';
+  listLabel.textContent = t('Country exposure');
+  left.appendChild(listLabel);
+  var maxW = portfolioHoldings[0].weight;
+  portfolioHoldings.slice(0,10).forEach(function(h){
+    var c = byIso[h.iso];
+    var row = document.createElement('div'); row.className='pf-row';
+    row.setAttribute('data-iso', h.iso);
+    row.addEventListener('click', function(){ selectCountry(h.iso); });
+    var name = document.createElement('div'); name.className='pf-name';
+    if(pinIndex(h.iso)>=0){
+      var dot = document.createElement('span'); dot.className='pin-dot'; dot.style.background=pinColor(h.iso);
+      name.appendChild(dot);
+    }
+    name.appendChild(document.createTextNode(cname(c)));
+    var track = document.createElement('div'); track.className='b-track';
+    var fill = document.createElement('div'); fill.className='b-fill';
+    fill.style.width = (h.weight/maxW*100)+'%';
+    track.appendChild(fill);
+    var val = document.createElement('div'); val.className='pf-val';
+    val.textContent = fmtNum(h.weight,1)+'%';
+    var pcv = document.createElement('div'); pcv.className='pf-pc';
+    pcv.textContent = c.co2_per_capita!=null ? fmtNum(c.co2_per_capita,1)+' t/pp' : '—';
+    var g = trendCAGR(h.iso);
+    var pill = document.createElement('span');
+    if(g==null){ pill.className='pf-trend'; pill.textContent='—'; }
+    else {
+      pill.className = 'status-pill '+(g<0?'falling':'rising');
+      pill.textContent = (g<0?'↓':'↑')+fmtNum(Math.abs(g*100),1)+'%';
+    }
+    row.appendChild(name); row.appendChild(track); row.appendChild(val);
+    row.appendChild(pcv); row.appendChild(pill);
+    left.appendChild(row);
+  });
+  if(portfolioHoldings.length>10){
+    var more = document.createElement('div'); more.className='views-empty';
+    more.textContent = tf('+{n} more countries',{n:portfolioHoldings.length-10});
+    left.appendChild(more);
+  }
+  var actions = document.createElement('div'); actions.style.marginTop='12px';
+  var pinBtn = document.createElement('button'); pinBtn.type='button'; pinBtn.className='util-btn';
+  pinBtn.textContent = tf('Pin top {n} to compare',{n:Math.min(4,portfolioHoldings.length)});
+  pinBtn.addEventListener('click', function(){
+    state.pinned = portfolioHoldings.slice(0,MAX_PINS).map(function(h){ return h.iso; });
+    renderPinned();
+    document.getElementById('compare-card').scrollIntoView({behavior:'smooth', block:'center'});
+  });
+  actions.appendChild(pinBtn);
+  left.appendChild(actions);
+  grid.appendChild(left);
+
+  // mini map: countries shaded by portfolio weight
+  var right = document.createElement('div');
+  var mapLabel = document.createElement('div'); mapLabel.className='pf-sec-label';
+  mapLabel.textContent = t('Where the weight sits');
+  right.appendChild(mapLabel);
+  var svgNS = 'http://www.w3.org/2000/svg';
+  var svgEl = document.createElementNS(svgNS,'svg');
+  svgEl.setAttribute('viewBox','0 0 960 520');
+  svgEl.setAttribute('width','100%');
+  var wByIso = {};
+  portfolioHoldings.forEach(function(h){ wByIso[h.iso]=h.weight; });
+  var pow = d3.scalePow().exponent(0.5).domain([0, maxW]).range([0.12, 1]).clamp(true);
+  GEO.features.forEach(function(f){
+    var p = document.createElementNS(svgNS,'path');
+    p.setAttribute('d', pathGen(f));
+    var w = wByIso[f.id];
+    p.setAttribute('fill', w!=null ? rampColor(pow(w), theme) : cssColor('--no-data'));
+    p.setAttribute('stroke', cssColor('--surface-card'));
+    p.setAttribute('stroke-width','0.5');
+    if(w!=null){
+      var ttl = document.createElementNS(svgNS,'title');
+      ttl.textContent = cnameIso(f.id)+': '+tf('{p}% of weight',{p:fmtNum(w,1)});
+      p.appendChild(ttl);
+    }
+    svgEl.appendChild(p);
+  });
+  right.appendChild(svgEl);
+  grid.appendChild(right);
+  results.appendChild(grid);
+}
+// pin toggles only need the row dots refreshed, not a full rebuild of the
+// results (the mini map alone is ~200 SVG paths)
+function updatePortfolioPinDots(){
+  document.querySelectorAll('#portfolio-results .pf-row').forEach(function(row){
+    var iso = row.getAttribute('data-iso');
+    var name = row.querySelector('.pf-name');
+    var dot = name.querySelector('.pin-dot');
+    if(dot) dot.remove();
+    if(pinIndex(iso)>=0){
+      var d = document.createElement('span'); d.className='pin-dot'; d.style.background=pinColor(iso);
+      name.insertBefore(d, name.firstChild);
+    }
+  });
+}
+document.getElementById('portfolio-apply-btn').addEventListener('click', function(){ applyPortfolio(false); });
+document.getElementById('portfolio-edit-btn').addEventListener('click', function(){
+  document.getElementById('portfolio-input').hidden = false;
+  this.hidden = true;
+});
+document.getElementById('portfolio-sample-btn').addEventListener('click', function(){
+  document.getElementById('portfolio-text').value = [
+    '# Sample: a global equity allocation',
+    'United States, 45', 'Japan, 8', 'United Kingdom, 6', 'China, 5',
+    'France, 4', 'Germany, 4', 'Canada, 3.5', 'Switzerland, 3',
+    'India, 3', 'Australia, 2.5', 'South Korea, 2.5', 'Taiwan, 2.5',
+    'Brazil, 2', 'Netherlands, 1.5'
+  ].join('\n');
+  applyPortfolio(false);
+});
+document.getElementById('portfolio-clear-btn').addEventListener('click', function(){
+  document.getElementById('portfolio-text').value = '';
+  document.getElementById('portfolio-parse-note').textContent = '';
+  portfolioHoldings = null;
+  try{ localStorage.removeItem(PORTFOLIO_KEY); }catch(e){}
+  renderPortfolio();
+});
+document.getElementById('portfolio-file').addEventListener('change', function(){
+  var f = this.files && this.files[0];
+  if(!f) return;
+  var reader = new FileReader();
+  reader.onload = function(){
+    document.getElementById('portfolio-text').value = String(reader.result||'');
+    applyPortfolio(false);
+  };
+  reader.readAsText(f);
+  this.value = '';
+});
+(function restorePortfolio(){
+  var stored = loadPortfolioText();
+  if(stored){
+    document.getElementById('portfolio-text').value = stored;
+    var parsed = parsePortfolio(stored);
+    if(parsed.holdings.length) portfolioHoldings = parsed.holdings;
+  }
+})();
 
 /* ================= guided tour (story mode) ================= */
 var storyIdx = 0;
@@ -1474,39 +2098,64 @@ function STORY_STEPS(){
   var noneCount = MAJOR_EMITTER_ISOS.filter(function(i){return NET_ZERO[i].status==='none';}).length;
   return [
     {
-      title: 'One number, one gap',
+      title: t('One number, one gap'),
       onEnter: function(){ state.metric='co2'; resetCountry(); renderMetricPicker(); renderMap(); renderLegend(); renderBarChart(); scrollToSection('.kpis'); },
-      html: 'In '+LATEST_YEAR+' the world emitted <b>'+fmtMt(worldLatest.co2)+'</b> of CO₂ &mdash; about <b>'+fmtNum(worldLatest.co2_per_capita,1)+' t</b> per person on average. '+
-        'That average hides an enormous gap in who actually caused it. This tour walks through the map below in five stops.'
+      html: tf('In {y} the world emitted <b>{v}</b> of CO\u2082 \u2014 about <b>{pc} t</b> per person on average. That average hides an enormous gap in who actually caused it. This tour walks through the dashboard below.',
+        {y:LATEST_YEAR, v:fmtMt(worldLatest.co2), pc:fmtNum(worldLatest.co2_per_capita,1)})
     },
     {
-      title: 'Today’s three biggest emitters',
+      title: t('Today\u2019s three biggest emitters'),
       onEnter: function(){ state.metric='co2'; selectCountry(top3[0].iso_code); renderMetricPicker(); renderMap(); renderLegend(); renderBarChart(); scrollToSection('.map-card'); },
-      html: '<b>'+top3.map(function(c){return c.country;}).join(', ')+'</b> alone account for <b>'+fmtNum(top3Share,1)+'%</b> of this year’s emissions. '+
-        'The map is set to total CO₂ &mdash; darker means more.'
+      html: tf('<b>{names}</b> alone account for <b>{p}%</b> of this year\u2019s emissions. The map is set to total CO\u2082 \u2014 darker means more.',
+        {names: top3.map(cname).join(', '), p:fmtNum(top3Share,1)})
     },
     {
-      title: 'The atmosphere remembers',
+      title: t('The atmosphere remembers'),
       onEnter: function(){ state.metric='cumulative_co2'; renderMetricPicker(); renderMap(); renderLegend(); renderBarChart(); scrollToSection('.map-card'); },
-      html: 'Switch to <b>cumulative</b> emissions since 1750 and the map redraws. Countries that industrialized first carry more than two centuries of accumulated CO₂ &mdash; '+
-        'a weight today’s fast-growing emitters haven’t caught up to yet.'
+      html: t('Switch to <b>cumulative</b> emissions since 1750 and the map redraws. Countries that industrialized first carry more than two centuries of accumulated CO\u2082 \u2014 a weight today\u2019s fast-growing emitters haven\u2019t caught up to yet.')
     },
     {
-      title: 'A fairer lens',
+      title: t('A fairer lens'),
       onEnter: function(){ state.metric='fair_share_ratio'; renderMetricPicker(); renderMap(); renderLegend(); renderBarChart(); scrollToSection('.map-card'); },
-      html: 'This map divides each country’s share of historical CO₂ by its share of world population. Blue countries emitted less than their population share; red countries emitted more. '+
-        '<b>High-income</b> countries hold <b>'+fmtNum(high.pop_share,1)+'%</b> of people but <b>'+fmtNum(high.share_global_cumulative_co2,1)+'%</b> of cumulative CO₂. '+
-        '<b>Low-income</b> countries hold <b>'+fmtNum(low.pop_share,1)+'%</b> of people and just <b>'+fmtNum(low.share_global_cumulative_co2,1)+'%</b>.'
+      html: tf('This map divides each country\u2019s share of historical CO\u2082 by its share of world population. Blue countries emitted less than their population share; red countries emitted more. <b>High-income</b> countries hold <b>{hp}%</b> of people but <b>{hc}%</b> of cumulative CO\u2082. <b>Low-income</b> countries hold <b>{lp}%</b> of people and just <b>{lc}%</b>.',
+        {hp:fmtNum(high.pop_share,1), hc:fmtNum(high.share_global_cumulative_co2,1),
+         lp:fmtNum(low.pop_share,1), lc:fmtNum(low.share_global_cumulative_co2,1)})
     },
     {
-      title: 'Where the pledges stand',
+      title: t('Pin countries side by side'),
+      onEnter: function(){
+        state.metric='co2'; state.selectedIso=null;
+        state.pinned=['CHN','USA','IND'];
+        renderMetricPicker(); renderLegend(); renderPinned();
+        scrollToSection('#compare-card');
+      },
+      html: t('Pin up to <b>4</b> countries \u2014 from the compare tray, a shift-click on the map, or the \u2606 on any row \u2014 and every chart follows: map outlines, the ranking, this side-by-side card, the trend lines, even the reduction scenario. Here are today\u2019s three biggest emitters.')
+    },
+    {
+      title: t('Where the emissions come from'),
+      onEnter: function(){ scrollToSection('#sectors-card'); },
+      html: t('Counting <b>every greenhouse gas</b>, not just CO\u2082, reveals structure: globally about three-quarters is energy, but Brazil\u2019s footprint is mostly <b>agriculture and land use</b>, while China\u2019s forests are a net carbon <b>sink</b> \u2014 drawn left of the axis. The rows follow your pinned countries.')
+    },
+    {
+      title: t('Where the pledges stand'),
       onEnter: function(){ scrollToSection('#targets-table'); },
-      html: 'Of the '+MAJOR_EMITTER_ISOS.length+' largest emitters tracked here, <b>'+lawCount+'</b> have a net-zero target written into law and <b>'+noneCount+'</b> &mdash; including the United States, since its 2025 withdrawal from the Paris Agreement &mdash; currently have no active national target at all. A target is not a trajectory: check the trend column next to it.'
+      html: tf('Of the {n} largest emitters tracked here, <b>{law}</b> have a net-zero target written into law and <b>{none}</b> \u2014 including the United States, since its 2025 withdrawal from the Paris Agreement \u2014 currently have no active national target at all. A target is not a trajectory: check the trend column next to it.',
+        {n:MAJOR_EMITTER_ISOS.length, law:lawCount, none:noneCount})
     },
     {
-      title: 'Try bending the curve',
+      title: t('Try bending the curve'),
       onEnter: function(){ scrollToSection('#scenario-group-picker'); },
-      html: 'The panel below turns the picture into a tool: pick a group of emitters and a reduction target, and see roughly how much warming that choice would avoid, using the IPCC’s standard climate-response estimate.'
+      html: t('The panel below turns the picture into a tool: pick a group of emitters and a reduction target, and see roughly how much warming that choice would avoid, using the IPCC\u2019s standard climate-response estimate.')
+    },
+    {
+      title: t('Overlay a portfolio'),
+      onEnter: function(){ scrollToSection('#portfolio-card'); },
+      html: t('Paste a holdings list \u2014 country and weight, straight from a spreadsheet \u2014 and see its climate exposure: weighted footprint, sector mix, and where emissions are still rising. Holdings never leave this browser. Try <b>Load sample</b>.')
+    },
+    {
+      title: t('Make it yours'),
+      onEnter: function(){ scrollToSection('.metric-picker.global'); },
+      html: t('<b>\u2606 Saved views</b> stars any metric + country + scenario combination and brings it back in one click, with a short link. <b>Share &amp; reuse</b> exports the current view as a citation-ready PNG sized for a deck or a social post. Your pins and selection from before this tour are restored when you close it.')
     }
   ];
 }
@@ -1519,7 +2168,7 @@ function renderStory(){
   var i = Math.max(0, Math.min(storyIdx, steps.length-1));
   storyIdx = i;
   var step = steps[i];
-  document.getElementById('story-eyebrow').textContent = 'Guided tour · '+(i+1)+' of '+steps.length;
+  document.getElementById('story-eyebrow').textContent = t('Guided tour')+' · '+(i+1)+' / '+steps.length;
   document.getElementById('story-title').textContent = step.title;
   document.getElementById('story-body').innerHTML = '<p>'+step.html+'</p>';
   var dots = document.getElementById('story-dots');
@@ -1528,11 +2177,30 @@ function renderStory(){
     var d = document.createElement('span'); if(idx===i) d.className='on'; dots.appendChild(d);
   });
   document.getElementById('story-prev-btn').style.visibility = i===0 ? 'hidden' : 'visible';
-  document.getElementById('story-next-btn').textContent = i===steps.length-1 ? 'Done' : 'Next';
+  document.getElementById('story-next-btn').textContent = i===steps.length-1 ? t('Done') : t('Next');
   step.onEnter();
 }
-function openStory(){ storyIdx=0; document.getElementById('story-overlay').hidden=false; renderStory(); }
-function closeStory(){ document.getElementById('story-overlay').hidden=true; }
+// The tour changes metric, selection, and pins to demonstrate them; snapshot
+// the user's setup on open and put it back on close.
+var tourSnapshot = null;
+function openStory(){
+  tourSnapshot = { metric: state.metric, pinned: state.pinned.slice(), selectedIso: state.selectedIso };
+  storyIdx=0;
+  document.getElementById('story-overlay').hidden=false;
+  renderStory();
+  document.getElementById('story-next-btn').focus();
+}
+function closeStory(){
+  document.getElementById('story-overlay').hidden=true;
+  if(tourSnapshot){
+    state.metric = tourSnapshot.metric;
+    state.pinned = tourSnapshot.pinned;
+    state.selectedIso = tourSnapshot.selectedIso;
+    tourSnapshot = null;
+    renderAll();
+  }
+  document.getElementById('story-open-btn').focus();
+}
 document.getElementById('story-open-btn').addEventListener('click', openStory);
 document.getElementById('story-overlay').addEventListener('click', function(e){ if(e.target.id==='story-overlay') closeStory(); });
 document.getElementById('story-prev-btn').addEventListener('click', function(){ storyIdx--; renderStory(); });
@@ -1549,8 +2217,7 @@ function currentViewParams(){
   if(state.selectedIso) p.set('country', state.selectedIso);
   if(state.pinned.length) p.set('pin', state.pinned.join(','));
   if(!scenarioIsDefault()) p.set('scenario', scenarioState.group+'-'+scenarioState.reduction+'-'+scenarioState.year);
-  var theme = root.getAttribute('data-theme');
-  if(theme) p.set('theme', theme);
+  if(lang!=='en') p.set('lang', lang);
   return p;
 }
 function syncUrl(){
@@ -1563,12 +2230,15 @@ function syncUrl(){
 function applyUrlState(){
   try{
     var p = new URLSearchParams(location.search);
+    var urlLang = p.get('lang');
+    if(LANG_DEFS[urlLang]){
+      lang = urlLang;
+      try{ localStorage.setItem('carbon-ledger-lang', urlLang); }catch(e){}
+    }
     // short view code wins over the legacy long-form params
     var dv = decodeViewCode(p.get('v'));
     if(dv){
       applyDecodedView(dv);
-      var th = p.get('theme');
-      if(!dv.theme && (th==='light' || th==='dark')) applyThemeAttr(th);
       return;
     }
     var sc = /^(top6|pinned|global)-(\d{1,3})-(\d{4})$/.exec(p.get('scenario')||'');
@@ -1587,8 +2257,6 @@ function applyUrlState(){
         return byIso[iso] && byIso[iso].co2!=null && arr.indexOf(iso)===i;
       }).slice(0, MAX_PINS);
     }
-    var theme = p.get('theme');
-    if(theme==='light' || theme==='dark') applyThemeAttr(theme);
   }catch(e){}
 }
 function shareUrl(){
@@ -1614,7 +2282,7 @@ document.addEventListener('click', function(e){
   if(!sharePop.hidden && !sharePop.contains(e.target) && e.target.id!=='share-open-btn'){ sharePop.hidden=true; }
 });
 function copyText(text, btn){
-  var done = function(){ var old=btn.textContent; btn.textContent='Copied'; setTimeout(function(){btn.textContent=old;},1200); };
+  var done = function(){ var old=btn.textContent; btn.textContent=t('Copied'); setTimeout(function(){btn.textContent=old;},1200); };
   if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done, done); }
   else { done(); }
 }
@@ -1644,15 +2312,15 @@ function saveFile(content, filename, type, btn){
   downloadsCapability.then(function(downloads){
     if(downloads){
       downloads.save({ filename: filename, data: content }).then(function(){
-        flashBtn(btn, 'Saved');
+        flashBtn(btn, t('Saved'));
       }).catch(function(err){
         if(err && err.code === 'declined') return; // viewer said no, don't retry
-        try { downloadBlob(content, filename, type); flashBtn(btn, 'Downloaded'); }
+        try { downloadBlob(content, filename, type); flashBtn(btn, t('Downloaded')); }
         catch(e){ /* nothing more we can do in this context */ }
       });
     } else {
       downloadBlob(content, filename, type);
-      flashBtn(btn, 'Downloaded');
+      flashBtn(btn, t('Downloaded'));
     }
   });
 }
@@ -1669,9 +2337,9 @@ document.getElementById('share-download-csv-btn').addEventListener('click', func
 });
 
 /* ================= saved views + short view codes ================= */
-// A view -- metric, pinned set, selection, scenario, explicit theme -- packs
-// into a compact code like "wd.CHN-USA..p50-2040" (metric+theme . pins .
-// selected . scenario), using only URL-safe literal characters. Short links
+// A view -- metric, pinned set, selection, scenario -- packs into a compact
+// code like "w.CHN-USA..p50-2040" (metric . pins . selected . scenario),
+// using only URL-safe literal characters. Short links
 // carry it as ?v=<code>; saved views store the same code in localStorage, so
 // one parser serves both.
 var METRIC_CODES = { co2:'c', co2_per_capita:'p', cumulative_co2:'m',
@@ -1689,8 +2357,7 @@ function scenarioIsDefault(){
     && scenarioState.year===SCENARIO_DEFAULT.year;
 }
 function encodeViewCode(){
-  var attr = root.getAttribute('data-theme');
-  var seg1 = METRIC_CODES[state.metric] + (attr==='light'?'l':attr==='dark'?'d':'');
+  var seg1 = METRIC_CODES[state.metric];
   var seg4 = scenarioIsDefault() ? ''
     : GROUP_CODES[scenarioState.group]+scenarioState.reduction+'-'+scenarioState.year;
   return [seg1, state.pinned.join('-'), state.selectedIso||'', seg4]
@@ -1699,12 +2366,10 @@ function encodeViewCode(){
 function decodeViewCode(code){
   if(!code) return null;
   var seg = String(code).split('.');
+  // the [ld] theme suffix is legacy — accepted so old links parse, ignored
   var m1 = /^([cpmwf])([ld])?$/.exec(seg[0]||'');
   if(!m1) return null;
-  var v = {
-    metric: METRIC_FROM_CODE[m1[1]],
-    theme: m1[2]==='l' ? 'light' : m1[2]==='d' ? 'dark' : null
-  };
+  var v = { metric: METRIC_FROM_CODE[m1[1]], theme: null };
   v.pinned = (seg[1]||'').split('-').filter(function(iso,i,a){
     return byIso[iso] && byIso[iso].co2!=null && a.indexOf(iso)===i;
   }).slice(0, MAX_PINS);
@@ -1734,7 +2399,7 @@ function applyDecodedView(v){
 function shortShareUrl(){
   var base = (location.protocol==='http:'||location.protocol==='https:')
     ? (location.origin+location.pathname) : ARTIFACT_URL;
-  return base + '?v=' + encodeViewCode();
+  return base + '?v=' + encodeViewCode() + (lang!=='en' ? '&lang='+lang : '');
 }
 
 var VIEWS_KEY = 'carbon-ledger-saved-views';
@@ -1750,12 +2415,12 @@ function storeSavedViews(list){
 function autoViewName(){
   var who;
   if(state.pinned.length){
-    var names = state.pinned.map(function(iso){ return byIso[iso].country; });
+    var names = state.pinned.map(cnameIso);
     who = names.slice(0,2).join(' · ') + (names.length>2 ? ' +'+(names.length-2) : '');
   } else if(state.selectedIso){
-    who = byIso[state.selectedIso].country;
-  } else who = 'World';
-  var parts = [who, currentMetric().label];
+    who = cnameIso(state.selectedIso);
+  } else who = t('World');
+  var parts = [who, t(currentMetric().label)];
   if(!scenarioIsDefault()){
     parts.push('−'+scenarioState.reduction+'% by '+scenarioState.year);
   }
@@ -1767,23 +2432,24 @@ function renderViewsList(){
   el.innerHTML = '';
   if(!list.length){
     var empty = document.createElement('div'); empty.className='views-empty';
-    empty.textContent = 'Nothing saved yet. Set up a comparison, pick a metric or scenario, then save it here.';
+    empty.textContent = t('Nothing saved yet. Set up a comparison, pick a metric or scenario, then save it here.');
     el.appendChild(empty);
     return;
   }
   list.forEach(function(v){
     var row = document.createElement('div'); row.className='view-row';
     var name = document.createElement('button'); name.type='button'; name.className='view-name';
-    name.textContent = v.name; name.title = 'Restore this view';
+    name.textContent = v.name; name.title = t('Restore this view');
     name.addEventListener('click', function(){
       var dv = decodeViewCode(v.code);
       if(!dv) return;
       applyDecodedView(dv);
       renderAll();
       viewsPop.hidden = true;
+      announce(t('Restored view: ')+v.name);
     });
     var link = document.createElement('button'); link.type='button'; link.className='view-link util-btn';
-    link.textContent = 'Link'; link.title = 'Copy short link';
+    link.textContent = t('Link'); link.title = t('Copy short link');
     link.addEventListener('click', function(){
       var base = (location.protocol==='http:'||location.protocol==='https:')
         ? (location.origin+location.pathname) : ARTIFACT_URL;
@@ -1809,6 +2475,7 @@ document.getElementById('views-open-btn').addEventListener('click', function(){
     input.value = '';
     input.placeholder = autoViewName();
     renderViewsList();
+    input.focus();
   }
 });
 document.getElementById('views-close-btn').addEventListener('click', function(){ viewsPop.hidden = true; });
@@ -1830,7 +2497,7 @@ document.getElementById('view-save-btn').addEventListener('click', function(){
   input.value = '';
   input.placeholder = autoViewName();
   renderViewsList();
-  flashBtn(this, 'Saved');
+  flashBtn(this, t('Saved'));
 });
 
 /* ================= share cards (exportable PNG) ================= */
@@ -1930,24 +2597,24 @@ function buildShareCard(sizeKey){
   ctx.textAlign = 'right';
   ctx.font = '500 '+Math.round(H*0.024)+'px '+MONO;
   ctx.fillStyle = pal.muted;
-  ctx.fillText('Data through '+LATEST_YEAR, W-P, hy);
+  ctx.fillText(tf('Data through {y}',{y:LATEST_YEAR}), W-P, hy);
   ctx.textAlign = 'left';
 
   // title + subtitle
   var title, subtitle;
   if(view==='global'){
-    title = m.mapLabel+', '+LATEST_YEAR;
-    subtitle = 'All countries · '+m.legendUnit;
+    title = t(m.mapLabel)+', '+LATEST_YEAR;
+    subtitle = t('All countries')+' · '+t(m.legendUnit);
   } else if(view==='country'){
     var iso0 = state.selectedIso || state.pinned[0];
     var c0 = byIso[iso0];
-    title = c0.country;
+    title = cname(c0);
     var rk = rankOf(iso0, m.key);
-    subtitle = m.mapLabel+', '+LATEST_YEAR+(rk ? ' · rank #'+rk.rank+' of '+rk.total : '');
+    subtitle = t(m.mapLabel)+', '+LATEST_YEAR+(rk ? ' · '+tf('rank #{r} of {n}',{r:rk.rank, n:rk.total}) : '');
   } else {
-    var names = state.pinned.map(function(iso){ return byIso[iso].country; });
-    title = names.length===2 ? names.join(' vs. ') : names.join(', ');
-    subtitle = m.mapLabel+', '+LATEST_YEAR+' · '+m.legendUnit;
+    var names = state.pinned.map(cnameIso);
+    title = names.length===2 ? names.join(' '+t('vs.')+' ') : names.join(', ');
+    subtitle = t(m.mapLabel)+', '+LATEST_YEAR+' · '+t(m.legendUnit);
   }
   var ty = hy + H*0.085;
   var tSize = fitText(ctx, title, W-2*P, Math.round(H*0.062), '800', SANS);
@@ -1976,7 +2643,7 @@ function buildShareCard(sizeKey){
       ctx.fillStyle = pal.cats[i]; ctx.fill();
       ctx.font = '700 '+Math.round(H*0.03)+'px '+SANS;
       ctx.fillStyle = pal.text;
-      ctx.fillText(c.country, P+H*0.028, y);
+      ctx.fillText(cname(c), P+H*0.028, y);
       var v = c[m.key];
       var by = y + rowH*0.16, bh = Math.min(H*0.034, rowH*0.3);
       ctx.fillStyle = pal.surface2;
@@ -1992,8 +2659,8 @@ function buildShareCard(sizeKey){
       ctx.textAlign = 'left';
       ctx.font = '400 '+Math.round(H*0.022)+'px '+SANS;
       ctx.fillStyle = pal.muted;
-      ctx.fillText('Per person '+(c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2)+' t':'—')
-        +' · Share of warming '+fmtPct(c.share_of_temperature_change_from_ghg),
+      ctx.fillText(t('Per person')+' '+(c.co2_per_capita!=null?fmtNum(c.co2_per_capita,2)+' t':'—')
+        +' · '+t('Share of warming')+' '+fmtPct(c.share_of_temperature_change_from_ghg),
         P, by+bh+rowH*0.22);
     });
   } else {
@@ -2008,24 +2675,24 @@ function buildShareCard(sizeKey){
       // small stats so the card never repeats a number
       var smallPool = [
         ['co2', 'CO₂, '+LATEST_YEAR, fmtMt(cS.co2)],
-        ['co2_per_capita', 'Per person', cS.co2_per_capita!=null?fmtNum(cS.co2_per_capita,2)+' t':'—'],
-        ['cumulative_co2', 'Cumulative since 1750', fmtMt(cS.cumulative_co2)],
-        ['share_global_co2', 'Share of global CO₂', fmtPct(cS.share_global_co2)],
-        ['share_of_temperature_change_from_ghg', 'Share of warming', fmtPct(cS.share_of_temperature_change_from_ghg)]
+        ['co2_per_capita', t('Per person'), cS.co2_per_capita!=null?fmtNum(cS.co2_per_capita,2)+' t':'—'],
+        ['cumulative_co2', t('Cumulative since 1750'), fmtMt(cS.cumulative_co2)],
+        ['share_global_co2', t('Share of global CO₂'), fmtPct(cS.share_global_co2)],
+        ['share_of_temperature_change_from_ghg', t('Share of warming'), fmtPct(cS.share_of_temperature_change_from_ghg)]
       ].filter(function(d){ return d[0]!==state.metric; }).slice(0,4);
       stats = [
-        { big: m.fmt(cS[m.key]), label: m.mapLabel },
+        { big: m.fmt(cS[m.key]), label: t(m.mapLabel) },
         { small: smallPool.map(function(d){ return [d[1], d[2]]; }) }
       ];
     } else {
       var topC = COUNTRIES.slice().filter(function(c){return c.co2!=null;}).sort(function(a,b){return b.co2-a.co2;})[0];
       stats = [
-        { big: fmtMt(worldLatest.co2), label: 'Global CO₂ emissions, '+LATEST_YEAR },
+        { big: fmtMt(worldLatest.co2), label: tf('Global CO₂ emissions, {y}',{y:LATEST_YEAR}) },
         { small: [
-          ['Average per person', fmtNum(worldLatest.co2_per_capita,2)+' t / yr'],
-          ['Cumulative since 1750', fmtMt(worldLatest.cumulative_co2)],
-          ['Warming from CO₂ so far', fmtC(worldLatest.temperature_change_from_co2)],
-          ['Largest emitter', topC.country+' · '+fmtPct(topC.share_global_co2)]
+          [t('Average per person'), fmtNum(worldLatest.co2_per_capita,2)+' t / yr'],
+          [t('Cumulative since 1750'), fmtMt(worldLatest.cumulative_co2)],
+          [t('Warming from CO₂ so far'), fmtC(worldLatest.temperature_change_from_co2)],
+          [t('Largest emitter'), cname(topC)+' · '+fmtPct(topC.share_global_co2)]
         ]}
       ];
     }
@@ -2054,8 +2721,8 @@ function buildShareCard(sizeKey){
   ctx.beginPath(); ctx.moveTo(P, fy); ctx.lineTo(W-P, fy); ctx.stroke();
   ctx.font = '400 '+Math.round(H*0.021)+'px '+SANS;
   ctx.fillStyle = pal.muted;
-  ctx.fillText('Data: Global Carbon Project via Our World in Data, owid/co2-data (CC BY 4.0)'
-    + (META.generated ? ' · refreshed '+META.generated : ''), P, fy+H*0.036);
+  ctx.fillText(t('Data: Global Carbon Project via Our World in Data, owid/co2-data (CC BY 4.0)')
+    + (META.generated ? ' · '+t('refreshed')+' '+META.generated : ''), P, fy+H*0.036);
   ctx.font = '400 '+Math.round(H*0.021)+'px '+MONO;
   ctx.fillText(shortShareUrl(), P, fy+H*0.068);
   return cv;
@@ -2075,8 +2742,9 @@ function openCardPreview(sizeKey){
     document.getElementById('card-preview-meta').textContent =
       cardState.filename+' · '+SHARE_SIZES[sizeKey].w+'×'+SHARE_SIZES[sizeKey].h+' px';
     document.getElementById('card-preview-hint').textContent =
-      'You can also right-click the preview to copy or save it.';
+      t('You can also right-click the preview to copy or save it.');
     document.getElementById('card-overlay').hidden = false;
+    document.getElementById('card-download-btn').focus();
   });
 }
 document.getElementById('share-card-deck-btn').addEventListener('click', function(){ openCardPreview('deck'); });
@@ -2097,7 +2765,7 @@ document.getElementById('card-download-btn').addEventListener('click', function(
     a.href = url; a.download = cardState.filename;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-    flashBtn(btn, 'Downloaded');
+    flashBtn(btn, t('Downloaded'));
   }, 'image/png');
 });
 (function initCardCopy(){
@@ -2111,11 +2779,219 @@ document.getElementById('card-download-btn').addEventListener('click', function(
     cardState.canvas.toBlob(function(blob){
       if(!blob) return;
       navigator.clipboard.write([new ClipboardItem({'image/png': blob})])
-        .then(function(){ flashBtn(btn, 'Copied'); },
-              function(){ flashBtn(btn, 'Copy blocked'); });
+        .then(function(){ flashBtn(btn, t('Copied')); },
+              function(){ flashBtn(btn, t('Copy blocked')); });
     }, 'image/png');
   });
 })();
+
+/* ================= country one-pager (print / save as PDF) ================= */
+// A print-formatted A4 profile of one country, previewed in an overlay and
+// exported through the browser's native print dialog -- vector chart,
+// selectable text, no libraries. Always light-themed (see styles.css): it is
+// destined for a report, not for matching the app's theme.
+var OP_CATS = ['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4'];
+
+function opTrendSvg(iso){
+  var h2 = HISTORY[iso];
+  if(!h2) return null;
+  var pts = h2.years.map(function(y,i){ return {x:y, y:h2.co2[i]}; })
+    .filter(function(p){ return p.y!=null && p.x>=1950; });
+  if(!pts.length) return null;
+  var w=700, h=210, ml=52, mr=14, mt=30, mb=22;
+  var svgEl = d3.select(document.createElementNS('http://www.w3.org/2000/svg','svg'));
+  svgEl.attr('viewBox','0 0 '+w+' '+h).attr('width','100%').style('display','block');
+  var last = pts[pts.length-1];
+  var xmax = SHOW_ALIGNED ? ALIGNED_ZERO_YEAR : last.x;
+  var x = d3.scaleLinear().domain([pts[0].x, xmax]).range([ml, w-mr]);
+  var y = d3.scaleLinear().domain([0, d3.max(pts,function(p){return p.y;})*1.1]).range([h-mb, mt]);
+  var g = svgEl.append('g');
+  y.ticks(4).forEach(function(t){
+    g.append('line').attr('x1',ml).attr('x2',w-mr).attr('y1',y(t)).attr('y2',y(t))
+      .attr('stroke','#e3e8e6').attr('stroke-width',1);
+    g.append('text').attr('x',ml-6).attr('y',y(t)+3).attr('text-anchor','end')
+      .attr('font-size',8.5).attr('fill','#798682').text(fmtMt(t));
+  });
+  [1950,1975,2000,2025,ALIGNED_ZERO_YEAR].filter(function(yr){ return yr<=xmax; }).forEach(function(yr){
+    g.append('text').attr('x',x(yr)).attr('y',h-mb+13).attr('text-anchor','middle')
+      .attr('font-size',8.5).attr('fill','#798682').text(yr);
+  });
+  g.append('line').attr('x1',ml).attr('x2',w-mr).attr('y1',h-mb).attr('y2',h-mb)
+    .attr('stroke','#c9d0ce').attr('stroke-width',1);
+  // global treaty milestones (muted) merged with this country's own policy
+  // dates (accented), one shared label-row rotation
+  var marks = MILESTONES.global.map(function(m){ return m; }).concat(
+    (MILESTONES.countries[iso]||[]).map(function(m){
+      return { year:m.year, short:m.short, label:m.label, national:true };
+    }));
+  drawMilestones(g, x, marks, 0, h-mb);
+  var line = d3.line().x(function(p){return x(p.x);}).y(function(p){return y(p.y);}).curve(d3.curveMonotoneX);
+  g.append('path').datum(pts).attr('d',line).attr('fill','none')
+    .attr('stroke',OP_CATS[0]).attr('stroke-width',1.8);
+  if(SHOW_ALIGNED){
+    g.append('path').datum([{x:last.x,y:last.y},{x:ALIGNED_ZERO_YEAR,y:0}]).attr('d',line)
+      .attr('fill','none').attr('stroke',OP_CATS[2]).attr('stroke-width',1.4)
+      .attr('stroke-dasharray','4,3');
+    g.append('text').attr('x',w-mr-4).attr('y',y(last.y*0.42)-6)
+      .attr('text-anchor','end')
+      .attr('font-size',8.5).attr('fill',OP_CATS[2]).attr('font-weight',600)
+      .text(t('1.5°C-aligned path'));
+  }
+  g.append('circle').attr('cx',x(last.x)).attr('cy',y(last.y)).attr('r',3)
+    .attr('fill',OP_CATS[0]).attr('stroke','#fff').attr('stroke-width',1.5);
+  g.append('text').attr('x',x(last.x)).attr('y',y(last.y)-7).attr('text-anchor','middle')
+    .attr('font-size',8.5).attr('fill','#0a1211').attr('font-weight',600).text(fmtMt(last.y));
+  return svgEl.node();
+}
+
+function renderOnePager(iso){
+  var c = byIso[iso];
+  var el = document.getElementById('onepager');
+  el.innerHTML = '';
+  var nz = NET_ZERO[iso];
+  var nzText = !nz ? t('No tracked national net-zero target')
+    : nz.year==null ? t('Net-zero target: ')+t(nz.statusLabel)
+    : t('Net-zero target: ')+nz.year+' · '+t(nz.statusLabel);
+  var today = META.generated || new Date().toISOString().slice(0,10);
+
+  var head = document.createElement('div');
+  head.innerHTML =
+    '<div class="op-brandrow">'
+    + '<div class="op-brand"><span class="dot"></span>Carbon Ledger · '+t('Country climate profile')+'</div>'
+    + '<div class="op-meta">'+t('Generated')+' '+today+'<br>'+tf('Data through {y}',{y:LATEST_YEAR})+'</div>'
+    + '</div>'
+    + '<h1>'+escapeHtml(cname(c))+'</h1>'
+    + '<div class="op-sub"><b>'+c.iso_code+'</b> · '+escapeHtml(nzText)+'</div>'
+    + '<hr class="op-rule">';
+  el.appendChild(head);
+
+  var rkCo2 = rankOf(iso,'co2'), rkPc = rankOf(iso,'co2_per_capita'), rkCum = rankOf(iso,'cumulative_co2');
+  var kpis = document.createElement('div'); kpis.className='op-kpis';
+  [
+    [tf('CO₂ emissions, {y}',{y:LATEST_YEAR}), fmtMt(c.co2), rkCo2 ? tf('rank #{r} of {n}',{r:rkCo2.rank, n:rkCo2.total}) : ''],
+    [t('Share of global CO₂'), fmtPct(c.share_global_co2), tf('of {v} worldwide',{v:fmtMt(worldLatest.co2)})],
+    [t('Per person'), c.co2_per_capita!=null ? fmtNum(c.co2_per_capita,2)+' t' : '—',
+      tf('world average {v} t',{v:fmtNum(worldLatest.co2_per_capita,2)})+(rkPc ? ' · '+tf('rank #{r}',{r:rkPc.rank}) : '')],
+    [t('Cumulative since 1750'), fmtMt(c.cumulative_co2), rkCum ? tf('rank #{r} all-time',{r:rkCum.rank}) : ''],
+    [t('Share of observed warming'), fmtPct(c.share_of_temperature_change_from_ghg), t('of warming from all greenhouse gases')],
+    [t('Fair-share ratio'), c.fair_share_ratio!=null ? fmtNum(c.fair_share_ratio,2)+'×' : '—', t('of a population-proportional share of historical CO₂')]
+  ].forEach(function(tile){
+    var d = document.createElement('div'); d.className='op-kpi';
+    d.innerHTML = '<div class="l">'+tile[0]+'</div><div class="v">'+tile[1]+'</div><div class="s">'+tile[2]+'</div>';
+    kpis.appendChild(d);
+  });
+  el.appendChild(kpis);
+
+  var chartTitle = document.createElement('div'); chartTitle.className='op-sec-title';
+  chartTitle.textContent = SHOW_ALIGNED
+    ? tf('Territorial CO₂, 1950–{y}, with a 1.5°C-aligned reference to {z} (Mt/yr)',{y:LATEST_YEAR, z:ALIGNED_ZERO_YEAR})
+    : tf('Territorial CO₂, 1950–{y} (Mt/yr)',{y:LATEST_YEAR});
+  el.appendChild(chartTitle);
+  var svg = opTrendSvg(iso);
+  if(svg) el.appendChild(svg);
+
+  var g10 = trendCAGR(iso);
+  var alignedRate = SHOW_ALIGNED ? 100/(ALIGNED_ZERO_YEAR-LATEST_YEAR) : null;
+  var prose = document.createElement('ul'); prose.className='op-prose';
+  var items = [];
+  items.push(tf('In {y}, {c} emitted <b>{v}</b> of CO₂ — <b>{p}</b> of the world total{rank}{pc}.',{
+    y:LATEST_YEAR, c:escapeHtml(cname(c)), v:fmtMt(c.co2), p:fmtPct(c.share_global_co2),
+    rank: rkCo2 ? tf(', ranking <b>#{r}</b> of {n} countries',{r:rkCo2.rank, n:rkCo2.total}) : '',
+    pc: c.co2_per_capita!=null ? tf(', at <b>{v} t</b> per person against a world average of {w} t',
+      {v:fmtNum(c.co2_per_capita,2), w:fmtNum(worldLatest.co2_per_capita,2)}) : ''
+  }));
+  if(g10!=null){
+    items.push(tf('Over {y0}–{y1}, emissions {verb} at <b>{g}%/yr</b>. Cumulatively since 1750 it accounts for <b>{cum}</b>{share}.',{
+      y0:LATEST_YEAR-10, y1:LATEST_YEAR, verb: g10<0 ? t('fell') : t('rose'),
+      g:fmtNum(Math.abs(g10*100),1), cum:fmtMt(c.cumulative_co2),
+      share: c.share_global_cumulative_co2!=null
+        ? tf(' — <b>{p}%</b> of all industrial-era CO₂',{p:fmtNum(c.share_global_cumulative_co2,2)}) : ''
+    }));
+  }
+  if(alignedRate!=null){
+    items.push(tf('A 1.5°C-consistent path — the global IPCC benchmark applied uniformly, not a national pledge — implies cutting about <b>{r}%</b> of the {y} level each year, reaching net-zero CO₂ by <b>{z}</b>. {nz}.',{
+      r:fmtNum(alignedRate,1), y:LATEST_YEAR, z:ALIGNED_ZERO_YEAR, nz:escapeHtml(nzText)
+    }));
+  }
+  prose.innerHTML = items.map(function(s){ return '<li>'+s+'</li>'; }).join('');
+  el.appendChild(prose);
+
+  var s = SECTORS.countries[iso];
+  if(s){
+    var gross = sectorGross(s);
+    if(gross>0){
+      var secTitle = document.createElement('div'); secTitle.className='op-sec-title';
+      secTitle.textContent = tf('Emissions by sector, {y} — all greenhouse gases, share of gross CO₂e',{y:SECTORS.year});
+      el.appendChild(secTitle);
+      var bar = document.createElement('div'); bar.className='op-secbar';
+      var cum = 0;
+      SECTOR_KEYS.forEach(function(k,i){
+        var frac = Math.max(0, s[k])/gross;
+        if(frac<=0) return;
+        var seg = document.createElement('div');
+        seg.style.left = (cum*100)+'%'; seg.style.width = (frac*100)+'%';
+        seg.style.background = OP_CATS[i];
+        bar.appendChild(seg);
+        cum += frac;
+      });
+      el.appendChild(bar);
+      var chips = document.createElement('div'); chips.className='op-chips';
+      SECTOR_KEYS.forEach(function(k,i){
+        var frac = Math.max(0, s[k])/gross;
+        if(frac<=0.001) return;
+        var chip = document.createElement('div'); chip.className='op-chip';
+        chip.innerHTML = '<span class="sw" style="background:'+OP_CATS[i]+'"></span>'
+          + sectorLabel(k)+' '+fmtNum(frac*100,0)+'%';
+        chips.appendChild(chip);
+      });
+      el.appendChild(chips);
+      if(s.land_use<0){
+        var sink = document.createElement('div'); sink.className='op-note';
+        sink.textContent = tf('Land use & forestry is a net sink of {v} CO₂e, excluded from the shares above.',{v:fmtMt(Math.abs(s.land_use))});
+        el.appendChild(sink);
+      }
+    }
+  }
+
+  var foot = document.createElement('div'); foot.className='op-foot';
+  var link = (location.protocol==='http:'||location.protocol==='https:')
+    ? location.origin+location.pathname+'?country='+iso : ARTIFACT_URL+'?country='+iso;
+  foot.innerHTML =
+    tf('Sources: Global Carbon Project via Our World in Data, owid/co2-data (CC BY 4.0); sector data Climate Watch via OWID ({y}, CO₂e); net-zero status ECIU Net Zero Tracker. Territorial production emissions; the 1.5°C reference is the IPCC SR1.5 global benchmark applied uniformly.',{y:SECTORS.year})
+    + ' '+t('Interactive version:')+' <span class="lnk">'+link+'</span>';
+  el.appendChild(foot);
+}
+
+function openOnePager(iso){
+  if(!byIso[iso]) return;
+  renderOnePager(iso);
+  document.getElementById('onepager-overlay').hidden = false;
+  document.getElementById('onepager-print-btn').focus();
+  announce(t('One-pager ready for ')+cnameIso(iso));
+}
+document.getElementById('onepager-print-btn').addEventListener('click', function(){ window.print(); });
+document.getElementById('onepager-close-btn').addEventListener('click', function(){
+  document.getElementById('onepager-overlay').hidden = true;
+});
+document.getElementById('onepager-overlay').addEventListener('click', function(e){
+  if(e.target.id==='onepager-overlay') this.hidden = true;
+});
+
+/* ================= global keyboard ================= */
+// Escape dismisses whatever is topmost: overlays first, then popovers, then
+// the compare-search dropdown. Focus returns to the control that opened it.
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Escape') return;
+  var opOv = document.getElementById('onepager-overlay');
+  if(!opOv.hidden){ opOv.hidden = true; return; }
+  var cardOv = document.getElementById('card-overlay');
+  var storyOv = document.getElementById('story-overlay');
+  if(!cardOv.hidden){ cardOv.hidden = true; document.getElementById('share-open-btn').focus(); return; }
+  if(!storyOv.hidden){ closeStory(); return; }
+  if(!sharePop.hidden){ sharePop.hidden = true; document.getElementById('share-open-btn').focus(); return; }
+  if(!viewsPop.hidden){ viewsPop.hidden = true; document.getElementById('views-open-btn').focus(); return; }
+  hideSuggest();
+});
 
 /* ================= orchestration ================= */
 function renderAll(){
@@ -2128,6 +3004,7 @@ function renderAll(){
   renderPanel();
   renderBarChart();
   renderTrendAll();
+  renderSubnational();
   renderAreaLegend();
   renderAreaChart();
   renderAreaTable();
@@ -2136,10 +3013,35 @@ function renderAll(){
   renderTargetsTable();
   renderScenarioControls();
   renderScenario();
+  renderPortfolio();
   renderCountryTable();
   syncUrl();
 }
+captureStaticI18n([
+  '.brand p', '#story-open-btn', '#share-open-btn', '#views-open-btn',
+  '#share-popover h3', '#share-popover .row-label', '#share-copy-link-btn',
+  '#share-copy-embed-btn', '#share-card-deck-btn', '#share-card-social-btn',
+  '#views-popover h3', '#views-popover .row-label', '#view-save-btn',
+  '.map-card .card-head .desc', '.tray-label',
+  '.cell-resp h2', '.cell-resp .desc', '.cell-resp .legend-chip',
+  '[data-table-toggle]',
+  '.cell-targets h2', '.cell-targets .desc', '#targets-table th', '.cell-targets .scenario-note',
+  '.cell-scenario h2', '.cell-scenario .desc', '.ctl-group .ctl-label', '.cell-scenario > .scenario-note',
+  '#portfolio-card h2', '#portfolio-card .card-head .desc',
+  '#portfolio-apply-btn', 'label[for="portfolio-file"]', '#portfolio-sample-btn',
+  '#portfolio-clear-btn', '#portfolio-edit-btn', '#portfolio-note',
+  '.cell-table .desc', '#country-table th',
+  '#compare-card .card-head h2',
+  '.onepager-frame .story-eyebrow', '.onepager-frame .card-preview-hint',
+  '#onepager-print-btn', '#onepager-close-btn',
+  '#card-overlay .story-eyebrow', '#card-copy-btn', '#card-download-btn', '#card-close-btn',
+  '#story-prev-btn',
+  'footer p:not(.footer-downloads)', '.footer-downloads .lbl',
+  'details.note-wrap summary',
+  '.pf-promo .pt'
+]);
 applyUrlState();
+applyStaticI18n();
 applyYearLabels();
 renderAll();
 if(new URLSearchParams(location.search).get('tour')==='1'){ openStory(); }
