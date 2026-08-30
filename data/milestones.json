@@ -1,0 +1,69 @@
+{
+  "global": [
+    { "year": 1992, "short": "Rio", "label": "UNFCCC adopted at the Rio Earth Summit" },
+    { "year": 1997, "short": "Kyoto", "label": "Kyoto Protocol adopted" },
+    { "year": 2005, "short": "Kyoto in force", "label": "Kyoto Protocol enters into force" },
+    { "year": 2015, "short": "Paris", "label": "Paris Agreement adopted" },
+    { "year": 2020, "short": "NDCs due", "label": "First round of Paris NDCs due" }
+  ],
+  "countries": {
+    "CHN": [
+      { "year": 2015, "short": "NDC", "label": "Paris NDC: peak CO2 around 2030" },
+      { "year": 2020, "short": "2060 pledge", "label": "Pledges carbon neutrality by 2060" }
+    ],
+    "USA": [
+      { "year": 2001, "short": "Exits Kyoto", "label": "Rejects Kyoto Protocol ratification" },
+      { "year": 2021, "short": "Rejoins Paris", "label": "Rejoins the Paris Agreement" },
+      { "year": 2025, "short": "Exits Paris", "label": "Withdraws from the Paris Agreement again" }
+    ],
+    "IND": [
+      { "year": 2021, "short": "2070 pledge", "label": "Pledges net zero by 2070 at COP26" }
+    ],
+    "RUS": [
+      { "year": 2019, "short": "Joins Paris", "label": "Formally accepts the Paris Agreement" },
+      { "year": 2021, "short": "2060 pledge", "label": "Announces 2060 net-zero goal" }
+    ],
+    "JPN": [
+      { "year": 2020, "short": "2050 pledge", "label": "Pledges net zero by 2050" }
+    ],
+    "DEU": [
+      { "year": 2021, "short": "2045 law", "label": "Climate law tightened: net zero by 2045" }
+    ],
+    "IDN": [
+      { "year": 2021, "short": "2060 pledge", "label": "Announces 2060 net-zero goal" }
+    ],
+    "IRN": [
+      { "year": 2015, "short": "Unratified", "label": "Signs but never ratifies the Paris Agreement" }
+    ],
+    "SAU": [
+      { "year": 2021, "short": "2060 pledge", "label": "Pledges net zero by 2060" }
+    ],
+    "KOR": [
+      { "year": 2021, "short": "2050 law", "label": "Carbon-neutrality act: net zero by 2050" }
+    ],
+    "CAN": [
+      { "year": 2011, "short": "Exits Kyoto", "label": "Withdraws from the Kyoto Protocol" },
+      { "year": 2021, "short": "2050 law", "label": "Net-zero accountability act: 2050 in law" }
+    ],
+    "TUR": [
+      { "year": 2021, "short": "Ratifies Paris", "label": "Ratifies Paris; announces 2053 net-zero goal" }
+    ],
+    "BRA": [
+      { "year": 2016, "short": "Ratifies Paris", "label": "Ratifies the Paris Agreement" },
+      { "year": 2021, "short": "2050 pledge", "label": "Brings neutrality pledge forward to 2050" }
+    ],
+    "MEX": [
+      { "year": 2012, "short": "Climate law", "label": "General law on climate change enacted" }
+    ],
+    "ZAF": [
+      { "year": 2024, "short": "Climate act", "label": "Climate Change Act signed into law" }
+    ],
+    "GBR": [
+      { "year": 2008, "short": "Climate act", "label": "Climate Change Act — first binding national carbon budget law" },
+      { "year": 2019, "short": "2050 law", "label": "Net zero by 2050 written into law" }
+    ],
+    "AUS": [
+      { "year": 2022, "short": "Climate act", "label": "Climate Change Act: 43% cut by 2030, net zero 2050" }
+    ]
+  }
+}

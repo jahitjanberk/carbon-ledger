@@ -30,13 +30,22 @@ import json
 import os
 import sys
 import urllib.request
+import zipfile
 from datetime import date, datetime, timezone
+from xml.etree import ElementTree
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, 'data')
 
 CO2_CSV_URL = 'https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv'
 SECTORS_CSV_URL = 'https://ourworldindata.org/grapher/ghg-emissions-by-sector.csv?useColumnShortNames=true'
+# Sub-national sources, keyed by ISO3. Only jurisdictions with an official,
+# openly licensed, machine-readable dataset belong here -- the app copes with
+# any coverage. US: EIA state energy-related CO2 (public domain).
+EIA_STATE_XLSX_URL = 'https://www.eia.gov/environment/emissions/state/excel/table1.xlsx'
+# ISO 3166 alpha-3 -> alpha-2, so the UI can localize country names through
+# Intl.DisplayNames (which only accepts alpha-2 region codes)
+ISO_CODES_URL = 'https://raw.githubusercontent.com/lukes/ISO-3166-Countries-with-Regional-Codes/master/all/all.json'
 
 COUNTRY_FIELDS = [
     'population', 'gdp', 'co2', 'co2_per_capita', 'cumulative_co2',
@@ -72,10 +81,14 @@ SECTOR_ENERGY_COLS = [
 ]
 
 
-def fetch(url, timeout=180):
+def fetch_bytes(url, timeout=180):
     req = urllib.request.Request(url, headers={'User-Agent': 'carbon-ledger-refresh/1.0'})
     with urllib.request.urlopen(req, timeout=timeout) as res:
-        return res.read().decode('utf-8')
+        return res.read()
+
+
+def fetch(url, timeout=180):
+    return fetch_bytes(url, timeout).decode('utf-8')
 
 
 def num(v, digits=3):
@@ -106,9 +119,14 @@ def build_from_co2_csv(text):
         iso = r.get('iso_code', '')
         if len(iso) == 3 and not iso.startswith('OWID') and int(r['year']) == latest:
             latest_by_iso[iso] = r
+    try:
+        iso2_by_iso3 = {e['alpha-3']: e['alpha-2'] for e in json.loads(fetch(ISO_CODES_URL))}
+    except Exception as e:  # noqa: BLE001 - names just stay English in the UI
+        print('WARNING: ISO alpha-2 mapping fetch failed (%s) — iso2 omitted' % e)
+        iso2_by_iso3 = {}
     for iso in sorted(latest_by_iso, key=lambda i: latest_by_iso[i]['country']):
         r = latest_by_iso[iso]
-        c = {'country': r['country'], 'iso_code': iso}
+        c = {'country': r['country'], 'iso_code': iso, 'iso2': iso2_by_iso3.get(iso)}
         for k in COUNTRY_FIELDS:
             c[k] = num(r.get(k))
         countries.append(c)
@@ -180,6 +198,83 @@ def build_sectors(text):
     return out
 
 
+def xlsx_rows(data):
+    """Minimal stdlib xlsx reader: first worksheet -> list of row lists.
+    Handles numeric cells, shared strings, and inline strings."""
+    M = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+    z = zipfile.ZipFile(io.BytesIO(data))
+    shared = []
+    if 'xl/sharedStrings.xml' in z.namelist():
+        root = ElementTree.fromstring(z.read('xl/sharedStrings.xml'))
+        for si in root.findall(M + 'si'):
+            shared.append(''.join(t.text or '' for t in si.iter(M + 't')))
+    sheet = ElementTree.fromstring(z.read('xl/worksheets/sheet1.xml'))
+    rows = []
+    for row in sheet.iter(M + 'row'):
+        cells = []
+        for c in row.iter(M + 'c'):
+            t = c.get('t')
+            if t == 'inlineStr':
+                cells.append(''.join(x.text or '' for x in c.iter(M + 't')))
+            else:
+                v = c.find(M + 'v')
+                if v is None:
+                    cells.append(None)
+                elif t == 's':
+                    cells.append(shared[int(v.text)])
+                else:
+                    cells.append(v.text)
+        rows.append(cells)
+    return rows
+
+
+def build_subnational():
+    """US states from EIA. Returns the subnational dict, or None to keep the
+    existing file (this source lives on another host with its own uptime, so
+    a failure here must not scrap an otherwise good refresh)."""
+    try:
+        rows = xlsx_rows(fetch_bytes(EIA_STATE_XLSX_URL))
+        hdr = next(i for i, r in enumerate(rows) if r and '1970' in [x for x in r if x])
+        years = [int(x) for x in rows[hdr][1:] if x and str(x).isdigit()]
+        latest, y10 = years[-1], years[-1] - 10
+        i_latest, i_y10 = years.index(latest) + 1, years.index(y10) + 1
+        regions, total = [], None
+        for r in rows[hdr + 1:]:
+            if not r or not r[0]:
+                continue
+            name = r[0].strip()
+            if name.lower().startswith('source'):
+                continue
+            try:
+                v = round(float(r[i_latest]), 2)
+                v10 = round(float(r[i_y10]), 2)
+            except (TypeError, ValueError, IndexError):
+                continue
+            if name == 'Total of states':
+                total = v
+                continue
+            regions.append({'name': name, 'co2': v, 'co2_10y_ago': v10})
+        regions.sort(key=lambda x: -x['co2'])
+        if not (45 <= len(regions) <= 60) or total is None or not 3000 < total < 8000 or latest < 2020:
+            raise ValueError('parsed shape looks wrong: %d regions, total %r, year %r'
+                             % (len(regions), total, latest))
+        return {
+            'USA': {
+                'level': 'state', 'unit': 'Mt CO2',
+                'scope': 'Energy-related CO2 from fossil-fuel combustion only; '
+                         'excludes industrial process emissions and land use.',
+                'source': 'U.S. Energy Information Administration, State Energy Data System',
+                'source_url': 'https://www.eia.gov/environment/emissions/state/',
+                'year': latest, 'trend_from': y10,
+                'national_total': total,
+                'regions': regions,
+            }
+        }
+    except Exception as e:  # noqa: BLE001 - any failure means "keep the old file"
+        print('WARNING: sub-national fetch failed (%s) — keeping existing data/subnational.json' % e)
+        return None
+
+
 def load_existing(name):
     path = os.path.join(DATA, name)
     if not os.path.exists(path):
@@ -241,6 +336,8 @@ def main():
 
     latest, countries, world, hist, income, = build_from_co2_csv(co2_text)
     sectors = build_sectors(sectors_text)
+    print('fetching %s ...' % EIA_STATE_XLSX_URL)
+    subnational = build_subnational()
 
     problems = validate(latest, countries, world, hist, income, sectors)
     if problems:
@@ -272,8 +369,11 @@ def main():
     write_json('history.json', hist)
     write_json('income.json', income)
     write_json('sectors.json', sectors)
+    if subnational is not None:
+        write_json('subnational.json', subnational)
     write_json('meta.json', meta)
-    print('wrote countries/world/history/income/sectors/meta .json')
+    print('wrote countries/world/history/income/sectors/meta .json'
+          + ('' if subnational is None else ' + subnational.json'))
     print('reminder: data/netzero.json is curated by hand — review targets against '
           'https://eciu.net/netzerotracker when refreshing.')
 
