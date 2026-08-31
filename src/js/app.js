@@ -370,13 +370,22 @@ function renderBudget(){
 function renderMetricPicker(){
   var el = document.getElementById('metric-picker');
   el.innerHTML = '';
+  var label = document.createElement('span');
+  label.className = 'tray-label';
+  label.textContent = t('Metric');
+  el.appendChild(label);
+  var sel = document.createElement('select');
+  sel.className = 'metric-select';
+  sel.setAttribute('aria-label', t('Metric'));
   METRICS.forEach(function(m){
-    var b = document.createElement('button');
-    b.type='button'; b.className='metric-btn'+(state.metric===m.key?' active':'');
-    b.textContent = t(m.label);
-    b.addEventListener('click', function(){ setMetric(m.key); });
-    el.appendChild(b);
+    var o = document.createElement('option');
+    o.value = m.key;
+    o.textContent = t(m.label);
+    sel.appendChild(o);
   });
+  sel.value = state.metric;
+  sel.addEventListener('change', function(){ setMetric(this.value); });
+  el.appendChild(sel);
 }
 
 /* ================= map time scrubber ================= */

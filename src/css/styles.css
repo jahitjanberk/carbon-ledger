@@ -164,7 +164,14 @@ header.top{
 .cell-table{ grid-column: 1 / -1; }
 
 /* the metric picker now sits above the grid: it drives the map, the ranking and the table */
-.metric-picker.global{ padding: 2px 0 0; }
+.metric-picker.global{ padding: 2px 0 0; align-items:center; gap:10px; }
+.metric-select{
+  border:1px solid var(--border-strong); background:var(--surface-card); color:var(--text-primary);
+  padding:7px 10px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer;
+  min-width:170px;
+}
+.metric-select:hover{ background:var(--surface-2); }
+.metric-select:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
 
 @media (max-width: 1180px){
   .cell-map, .cell-area, .cell-targets, .cell-scenario, .cell-table{ grid-column: 1 / -1; }
